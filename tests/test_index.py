@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from findex.corpus import Document
-from findex.index import DocMeta, Index, Posting, build_index
+from findex.index import DocMeta, Posting, build_index
 
 
 def make(*texts):
