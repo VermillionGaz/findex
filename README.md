@@ -7,3 +7,8 @@
 Lazy consumes significantly less memory, while taking ~15% longer.
 this is likely due to pausing of generators for every token.
 the times are inflated because of tracemalloc as well, but that is non-factor here.
+
+| Format | Size | Save | Load | Round trip |
+|--------|------|------|------|------------|
+| pickle | 58.9 | 9.19 | 9.74 | OK         |
+| binary | 33.9 | 0.63 | 5.11 | OK         |

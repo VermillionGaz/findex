@@ -1,6 +1,7 @@
 """In-memory inverted index, built in a single streaming pass.
 
     python -m findex.index data/simplewiki.jsonl [--limit N] [--term cat]
+    python -m findex.index data/simplewiki.jsonl --out index.bin [--format binary|pickle]
 """
 from __future__ import annotations
 
@@ -67,6 +68,8 @@ def main() -> None:
     ap.add_argument("root", type=Path)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--term", default=None, help="print the postings for this term")
+    ap.add_argument("--out", type=Path, default=None, help="save the index to this file")
+    ap.add_argument("--format", choices=("binary", "pickle"), default="binary")
     args = ap.parse_args()
 
     tracemalloc.start()
@@ -82,6 +85,13 @@ def main() -> None:
     print(f"postings:     {n_postings}")
     print(f"elapsed:      {elapsed:.2f}s")
     print(f"peak memory:  {peak / 1e6:.1f} MB")
+    if args.out:
+        from .store import save  # imported here: store itself imports this module
+
+        t0 = time.perf_counter()
+        save(index, args.out, args.format)
+        print(f"saved:        {args.out} ({args.format}, "
+              f"{args.out.stat().st_size / 1e6:.1f} MB, {time.perf_counter() - t0:.2f}s)")
     if args.term:
         plist = index.get(args.term)
         print(f"'{args.term}': in {len(plist)} documents; first 5:")
@@ -90,4 +100,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # When run with `python -m findex.index`, this file is the module "__main__", so the
+    # classes defined above would be pickled as "__main__.Posting" and could not be loaded
+    # from anywhere else. Re-importing under the real name avoids that.
+    from findex.index import main as _main
+
+    _main()

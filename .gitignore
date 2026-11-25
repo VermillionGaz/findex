@@ -1,2 +1,4 @@
 /data/
 /dev/
+index.bin
+*.pkl

@@ -1,8 +1,7 @@
 """Boolean search over the in-memory index.
 
-    python -m findex.search data/simplewiki.jsonl "cat dog" --limit 20000
-    python -m findex.search data/simplewiki.jsonl "cat OR dog NOT bird" --engine set
-    python -m findex.search data/simplewiki.jsonl --bench --limit 20000
+    python -m findex.search index.bin "cat dog"                             # saved index
+    python -m findex.search data/simplewiki.jsonl "cat dog" --limit 20000   # build first
 
 Query language (operators must be UPPERCASE; evaluated strictly left to right):
     a b        implicit AND
@@ -22,6 +21,7 @@ from pathlib import Path
 
 from .corpus import iter_documents
 from .index import Index, build_index
+from .store import detect_format, load
 from .tokenize import tokenize
 
 DocIds = list[int]  # always sorted ascending, no duplicates
@@ -188,17 +188,22 @@ def benchmark(index: Index) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="findex.search")
-    ap.add_argument("root", type=Path, help="corpus to index (a saved index comes in M3)")
+    ap.add_argument("source", type=Path, help="a saved index file, or a corpus to index")
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--engine", choices=sorted(ENGINES), default="merge")
     ap.add_argument("--top", type=int, default=10, help="how many results to print")
     ap.add_argument("--bench", action="store_true", help="benchmark merge vs set")
+    ap.add_argument("--trust-pickle", action="store_true", help="allow loading a pickle index (only files you created yourself!)")
     args = ap.parse_args()
 
     t0 = time.perf_counter()
-    index = build_index(islice(iter_documents(args.root), args.limit))
-    print(f"indexed {index.n_docs} documents in {time.perf_counter() - t0:.2f}s")
+    if detect_format(args.source):
+        index = load(args.source, trust_pickle=args.trust_pickle)
+        print(f"loaded {index.n_docs} documents in {time.perf_counter() - t0:.2f}s")
+    else:
+        index = build_index(islice(iter_documents(args.source), args.limit))
+        print(f"indexed {index.n_docs} documents in {time.perf_counter() - t0:.2f}s")
 
     if args.bench:
         benchmark(index)
