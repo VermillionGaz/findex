@@ -1,7 +1,12 @@
-"""Boolean search over the in-memory index.
+"""Ranked Boolean search over the in-memory index.
 
-    python -m findex.search index.bin "cat dog"                             # saved index
+    python -m findex.search index.bin "cat dog"                             # saved index, BM25
+    python -m findex.search index.bin "cat dog" --scorer tfidf              # TF-IDF instead
+    python -m findex.search index.bin "cat dog" --scorer none               # unranked (Lab 2)
     python -m findex.search data/simplewiki.jsonl "cat dog" --limit 20000   # build first
+
+The Boolean query decides WHICH documents match; the scorer decides their ORDER,
+using every term that isn't negated.
 
 Query language (operators must be UPPERCASE; evaluated strictly left to right):
     a b        implicit AND
@@ -22,6 +27,7 @@ from pathlib import Path
 
 from .corpus import iter_documents
 from .index import Index, build_index
+from .rank import BM25, SCORERS, Scorer, SearchResult, rank
 from .store import detect_format, load
 from .tokenize import tokenize
 
@@ -152,6 +158,44 @@ def evaluate(index: Index, query: str, engine: str = "merge") -> DocIds:
     return result if result is not None else []
 
 
+def positive_terms(query: str) -> list[str]:
+    """The tokens that should contribute to the score: every term except operators
+    and terms directly negated with NOT. Duplicates are kept, so "cat cat" weighs
+    cat twice -- the same as repeating a word in a search engine."""
+    terms: list[str] = []
+    negated = False
+    for word in query.split():
+        if word in ("AND", "OR"):
+            continue
+        if word == "NOT":
+            negated = True
+            continue
+        if not negated:
+            terms.extend(tokenize(word))
+        negated = False
+    return terms
+
+
+def search(
+    index: Index,
+    query: str,
+    scorer: Scorer = BM25(),
+    k: int = 10,
+    engine: str = "merge",
+) -> list[SearchResult]:
+    """Top-k documents matching the Boolean query, best first.
+
+    (BM25() as a default argument is safe: default values are created once, but a
+    frozen dataclass can't be mutated, so every call sees the same, unchanged scorer.)
+    """
+    candidates = set(evaluate(index, query, engine))
+    terms = positive_terms(query)
+    if not terms:
+        # e.g. "NOT cat": nothing to score by, so the matches come back unranked.
+        return [SearchResult(0.0, d, index.doc_meta[d].title) for d in sorted(candidates)[:k]]
+    return rank(index, terms, scorer, k, candidates)
+
+
 def _bad_not() -> str:
     raise ValueError("'OR NOT' is not supported; write 'a NOT b' instead")
 
@@ -194,6 +238,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--engine", choices=sorted(ENGINES), default="merge")
     ap.add_argument("--top", type=int, default=10, help="how many results to print")
+    ap.add_argument("--scorer", choices=[*SCORERS, "none"], default="bm25",
+                    help="ranking function; 'none' = unranked Boolean results (Lab 2)")
     ap.add_argument("--bench", action="store_true", help="benchmark merge vs set")
     ap.add_argument("--trust-pickle", action="store_true", help="allow loading a pickle index (only files you created yourself!)")
     args = ap.parse_args()
@@ -212,15 +258,20 @@ def main() -> None:
         benchmark(index)
         return
     t0 = time.perf_counter()
-    hits = evaluate(index, args.query, args.engine)
+    if args.scorer == "none":
+        hits = evaluate(index, args.query, args.engine)
+        results = [SearchResult(0.0, d, index.doc_meta[d].title) for d in hits[: args.top]]
+        summary = f"{len(hits)} results"
+    else:
+        results = search(index, args.query, SCORERS[args.scorer], args.top, args.engine)
+        summary = f"top {len(results)} results"
     ms = (time.perf_counter() - t0) * 1000
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    print(f"{len(hits)} results for {args.query!r} ({args.engine}, {ms:.2f} ms)")
+    print(f"{summary} for {args.query!r} ({args.engine}, {args.scorer}, {ms:.2f} ms)")
     print(f"peak memory: {peak / 1e6:.1f} MB")
-    for doc_id in hits[: args.top]:
-        meta = index.doc_meta[doc_id]
-        print(f"  [{doc_id}] {meta.title}  ({meta.ext_id})")
+    for r in results:
+        print(f"  {r.score:7.3f}  [{r.doc_id}] {r.title}  ({index.doc_meta[r.doc_id].ext_id})")
 
 
 if __name__ == "__main__":
