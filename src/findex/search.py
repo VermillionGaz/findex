@@ -1,19 +1,16 @@
 """Ranked Boolean search over the in-memory index.
 
-    python -m findex.search index.bin "cat dog"                             # saved index, BM25
-    python -m findex.search index.bin "cat dog" --scorer tfidf              # TF-IDF instead
-    python -m findex.search index.bin "cat dog" --scorer none               # unranked (Lab 2)
+    python -m findex.search index.bin 'python AND (async OR await) NOT java "event loop"'
+    python -m findex.search index.bin "cat dog" --scorer tfidf              # TF-IDF instead of BM25
+    python -m findex.search index.bin "cat dog" --scorer none               # unranked (Lab 2 style)
+    python -m findex.search index.bin "cat dog" --explain                   # show the parsed tree
     python -m findex.search data/simplewiki.jsonl "cat dog" --limit 20000   # build first
 
-The Boolean query decides WHICH documents match; the scorer decides their ORDER,
-using every term that isn't negated.
+Query language (see query.py): AND, OR, NOT (uppercase), parentheses, "quoted phrases";
+a space means AND; precedence NOT > AND > OR.
 
-Query language (operators must be UPPERCASE; evaluated strictly left to right):
-    a b        implicit AND
-    a AND b    explicit AND
-    a OR b     union
-    a NOT b    a AND NOT b  (documents with a but without b)
-    NOT a      every document without a
+The query decides WHICH documents match; the scorer decides their ORDER, using
+every term that isn't negated.
 """
 from __future__ import annotations
 
@@ -27,6 +24,7 @@ from pathlib import Path
 
 from .corpus import iter_documents
 from .index import Index, build_index
+from .query import ParseError, parse
 from .rank import BM25, SCORERS, Scorer, SearchResult, rank
 from .store import detect_format, load
 from .tokenize import tokenize
@@ -110,70 +108,20 @@ ENGINES: dict[str, dict[str, Op]] = {
 
 # --- query evaluation ------------------------------------------------------------------
 
-def term_ids(index: Index, word: str, ops: dict[str, Op]) -> DocIds | None:
-    """Doc ids for one query word, normalized exactly like the corpus was.
-
-    "Cats" -> "cats"; "U.S." -> two tokens u, s -> must contain both.
-    Returns None if the word has no tokens at all (e.g. "!!!"): it is ignored.
-    """
-    result: DocIds | None = None
-    for tok in tokenize(word):
-        ids = [p.doc_id for p in index.get(tok, [])]
-        result = ids if result is None else ops["AND"](result, ids)
-    return result
-
-
 def evaluate(index: Index, query: str, engine: str = "merge") -> DocIds:
-    ops = ENGINES[engine]
-    result: DocIds | None = None
-    pending = "AND"          # operator waiting for its right-hand side
-    expect_term = False      # True right after an operator
+    """Sorted ids of the documents matching the query.
 
-    for word in query.split():
-        if word in ("AND", "OR", "NOT"):
-            if expect_term:
-                raise ValueError(f"operator {word!r} directly after another operator")
-            if word == "NOT":
-                pending = "NOT" if pending in ("AND", "NOT") else _bad_not()
-            elif result is None:
-                raise ValueError(f"query cannot start with {word!r}")
-            else:
-                pending = word
-            expect_term = True
-            continue
-
-        ids = term_ids(index, word, ops)
-        if ids is None:
-            continue
-        if result is None:
-            # first operand: "NOT a" means "all documents minus a"
-            result = ops["NOT"](list(range(index.num_docs)), ids) if pending == "NOT" else ids
-        else:
-            result = ops[pending](result, ids)
-        pending = "AND"
-        expect_term = False
-
-    if expect_term:
-        raise ValueError("query ends with an operator")
-    return result if result is not None else []
+    Lab 2 evaluated strictly left to right; now the query is parsed into a tree
+    (with precedence and parentheses) and the tree evaluates itself, using the
+    chosen engine's merge functions.
+    """
+    return parse(query).evaluate(index, ENGINES[engine])
 
 
 def positive_terms(query: str) -> list[str]:
-    """The tokens that should contribute to the score: every term except operators
-    and terms directly negated with NOT. Duplicates are kept, so "cat cat" weighs
-    cat twice -- the same as repeating a word in a search engine."""
-    terms: list[str] = []
-    negated = False
-    for word in query.split():
-        if word in ("AND", "OR"):
-            continue
-        if word == "NOT":
-            negated = True
-            continue
-        if not negated:
-            terms.extend(tokenize(word))
-        negated = False
-    return terms
+    """The tokens that contribute to the score: every term and phrase word except
+    negated ones. Duplicates are kept, so "cat cat" weighs cat twice."""
+    return parse(query).positive_terms()
 
 
 def search(
@@ -188,16 +136,13 @@ def search(
     (BM25() as a default argument is safe: default values are created once, but a
     frozen dataclass can't be mutated, so every call sees the same, unchanged scorer.)
     """
-    candidates = set(evaluate(index, query, engine))
-    terms = positive_terms(query)
+    tree = parse(query)
+    candidates = set(tree.evaluate(index, ENGINES[engine]))
+    terms = tree.positive_terms()
     if not terms:
         # e.g. "NOT cat": nothing to score by, so the matches come back unranked.
         return [SearchResult(0.0, d, index.doc_meta[d].title) for d in sorted(candidates)[:k]]
     return rank(index, terms, scorer, k, candidates)
-
-
-def _bad_not() -> str:
-    raise ValueError("'OR NOT' is not supported; write 'a NOT b' instead")
 
 
 # --- benchmark: merge vs set --------------------------------------------------------------
@@ -240,9 +185,18 @@ def main() -> None:
     ap.add_argument("--top", type=int, default=10, help="how many results to print")
     ap.add_argument("--scorer", choices=[*SCORERS, "none"], default="bm25",
                     help="ranking function; 'none' = unranked Boolean results (Lab 2)")
+    ap.add_argument("--explain", action="store_true", help="print the parsed query tree")
     ap.add_argument("--bench", action="store_true", help="benchmark merge vs set")
     ap.add_argument("--trust-pickle", action="store_true", help="allow loading a pickle index (only files you created yourself!)")
     args = ap.parse_args()
+
+    if not args.bench:
+        try:
+            tree = parse(args.query)
+        except ParseError as e:            # check the query before loading anything
+            ap.error(str(e))
+        if args.explain:
+            print(f"parsed: {tree}\n        {tree!r}")
 
     tracemalloc.start()
     t0 = time.perf_counter()

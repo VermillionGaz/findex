@@ -33,7 +33,8 @@ from .index import DocMeta, Index, Posting, build_index
 # ---------------------------------------------------------------------------------------
 
 FORMATS = ("pickle", "binary")
-MAGIC = b"FINDEXB1"            # 8 bytes: identifies our binary format, version 1
+MAGIC = b"FINDEXB1"            # 8 bytes: identifies our binary format
+VERSION = 2                    # header version: 1 = no positions, 2 = optional positions
 assert array("I").itemsize == 4, "this format needs 4-byte unsigned ints"
 
 
@@ -97,14 +98,19 @@ def _save_binary(index: Index, f: BinaryIO) -> None:
     df = array("I", (index.df(t) for t in terms))   # postings per term
     doc_ids = array("I")                                        # all postings, term by term
     tfs = array("I")
+    positions = array("I")      # every posting's positions, back to back (tf of them each)
+    has_positions = index.has_positions
     for term in terms:
         for p in index[term]:
             doc_ids.append(p.doc_id)
             tfs.append(p.tf)
+            if has_positions:
+                positions.extend(p.positions)
     lengths = array("I", (index.doc_lengths[i] for i in range(n_docs)))
 
     header = {
-        "version": 1,
+        "version": VERSION,
+        "has_positions": has_positions,
         "terms": terms,
         "meta": [[m.ext_id, m.path, m.title] for m in (index.doc_meta[i] for i in range(n_docs))],
         "n_postings": len(doc_ids),
@@ -115,6 +121,9 @@ def _save_binary(index: Index, f: BinaryIO) -> None:
     f.write(blob)
     for arr in (lengths, df, doc_ids, tfs):
         _write_array(arr, f)
+    if has_positions:
+        # No separate count needed: posting i owns the next tfs[i] numbers.
+        _write_array(positions, f)
 
 
 def _load_binary(f: BinaryIO) -> Index:
@@ -122,8 +131,9 @@ def _load_binary(f: BinaryIO) -> Index:
         raise ValueError("not a findex binary file")
     (hlen,) = struct.unpack("<Q", f.read(8))
     header = json.loads(f.read(hlen).decode("utf-8"))
-    if header.get("version") != 1:
+    if header.get("version") not in (1, VERSION):
         raise ValueError(f"unsupported index version: {header.get('version')}")
+    has_positions = header.get("has_positions", False)   # version-1 files: never
 
     terms: list[str] = header["terms"]
     meta = header["meta"]
@@ -133,12 +143,20 @@ def _load_binary(f: BinaryIO) -> Index:
     tfs = _read_array(f, header["n_postings"])
     if sum(df) != header["n_postings"]:
         raise ValueError("corrupt index: posting counts do not add up")
+    positions = _read_array(f, sum(tfs)) if has_positions else None
 
     postings: dict[str, list[Posting]] = {}
-    pos = 0
+    pos = 0       # index into doc_ids/tfs
+    off = 0       # index into positions
     for term, n in zip(terms, df, strict=True):
-        chunk = zip(doc_ids[pos:pos + n], tfs[pos:pos + n], strict=True)
-        postings[term] = [Posting(d, t) for d, t in chunk]
+        plist = []
+        for d, t in zip(doc_ids[pos:pos + n], tfs[pos:pos + n], strict=True):
+            if positions is not None:
+                plist.append(Posting(d, t, tuple(positions[off:off + t])))
+                off += t
+            else:
+                plist.append(Posting(d, t))
+        postings[term] = plist
         pos += n
     return Index(
         postings=postings,

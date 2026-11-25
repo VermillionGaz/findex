@@ -23,6 +23,9 @@ from .tokenize import tokenize
 class Posting:
     doc_id: int  # internal sequential id: 0, 1, 2, ...
     tf: int      # how many times the term occurs in that document
+    # Token offsets of each occurrence, ascending (len == tf). Empty if the index
+    # was built without positions. Needed for phrase queries and snippets.
+    positions: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,23 +105,46 @@ class Index(Mapping[str, list[Posting]]):
     def doc_length(self, doc_id: int) -> int:
         return self.doc_lengths[doc_id]
 
+    @property
+    def has_positions(self) -> bool:
+        """Was this index built with token positions? (Every posting has tf >= 1, so
+        one posting is enough to tell.)"""
+        for plist in self.postings.values():
+            return bool(plist[0].positions)
+        return False
+
     def df(self, term: str) -> int:
         """Document frequency: how many documents contain the term (0 if none)."""
         postings = self.postings.get(term)
         return len(postings) if postings is not None else 0
 
 
-def build_index(docs: Iterable[Document]) -> Index:
+def build_index(docs: Iterable[Document], *, positions: bool = True) -> Index:
+    """One streaming pass over the corpus.
+
+    positions=True also records where in each document every term occurs, which
+    phrase queries need. It costs memory: one int per token in the corpus.
+    """
     postings: defaultdict[str, list[Posting]] = defaultdict(list)
     doc_lengths: dict[int, int] = {}
     doc_meta: dict[int, DocMeta] = {}
 
     for doc_id, doc in enumerate(docs):  # ascending ids => every list stays sorted for free
-        counts = Counter(tokenize(doc.text))  # this document's term frequencies, then discarded
-        doc_lengths[doc_id] = sum(counts.values())
         doc_meta[doc_id] = DocMeta(ext_id=doc.doc_id, path=str(doc.path), title=doc.title)
-        for term, tf in counts.items():
-            postings[term].append(Posting(doc_id, tf))
+        if positions:
+            # term -> its offsets in this document; tf is just how many there are
+            where: defaultdict[str, list[int]] = defaultdict(list)
+            n_tokens = 0
+            for n_tokens, term in enumerate(tokenize(doc.text), start=1):
+                where[term].append(n_tokens - 1)
+            doc_lengths[doc_id] = n_tokens
+            for term, offs in where.items():
+                postings[term].append(Posting(doc_id, len(offs), tuple(offs)))
+        else:
+            counts = Counter(tokenize(doc.text))  # this document's term frequencies, then discarded
+            doc_lengths[doc_id] = sum(counts.values())
+            for term, tf in counts.items():
+                postings[term].append(Posting(doc_id, tf))
 
     # Convert to a plain dict: a defaultdict would silently create an empty entry
     # for every unknown term that someone looks up.
@@ -132,11 +158,14 @@ def main() -> None:
     ap.add_argument("--term", default=None, help="print the postings for this term")
     ap.add_argument("--out", type=Path, default=None, help="save the index to this file")
     ap.add_argument("--format", choices=("binary", "pickle"), default="binary")
+    ap.add_argument("--no-positions", action="store_true",
+                    help="don't record token positions (smaller, but no phrase queries)")
     args = ap.parse_args()
 
     tracemalloc.start()
     t0 = time.perf_counter()
-    index = build_index(islice(iter_documents(args.root), args.limit))
+    index = build_index(islice(iter_documents(args.root), args.limit),
+                        positions=not args.no_positions)
     elapsed = time.perf_counter() - t0
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -158,7 +187,8 @@ def main() -> None:
         plist = index.get(args.term, [])
         print(f"'{args.term}': in {len(plist)} documents; first 5:")
         for p in plist[:5]:
-            print(f"  doc {p.doc_id} ({index.doc_meta[p.doc_id].title!r}) tf={p.tf}")
+            print(f"  doc {p.doc_id} ({index.doc_meta[p.doc_id].title!r}) tf={p.tf} "
+                  f"positions={p.positions[:10]}")
 
 
 if __name__ == "__main__":
