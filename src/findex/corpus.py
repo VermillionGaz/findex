@@ -15,6 +15,7 @@ class Document:
     doc_id: str
     path: Path
     text: str
+    title: str = ""
 
 
 def _iter_txt_dir(root: Path) -> Iterator[Document]:
@@ -24,7 +25,7 @@ def _iter_txt_dir(root: Path) -> Iterator[Document]:
         except UnicodeDecodeError as exc:
             log.warning("skipping %s: %s", path, exc)
             continue
-        yield Document(doc_id=str(path.relative_to(root)), path=path, text=text)
+        yield Document(doc_id=str(path.relative_to(root)), path=path, text=text, title=path.stem)
 
 
 def _iter_jsonl(path: Path) -> Iterator[Document]:
@@ -35,7 +36,7 @@ def _iter_jsonl(path: Path) -> Iterator[Document]:
                 continue
             try:
                 obj = json.loads(line)
-                yield Document(doc_id=str(obj.get("id", n)), path=path, text=obj["text"])
+                yield Document(doc_id=str(obj.get("id", n)), path=path, text=obj["text"], title=str(obj.get("title", "")))
             except (json.JSONDecodeError, KeyError) as exc:
                 log.warning("skipping %s line %d: %s", path, n, exc)
 
