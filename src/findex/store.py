@@ -15,6 +15,8 @@ import sys
 import tempfile
 import time
 from array import array
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import partial
 from itertools import islice
 from pathlib import Path
@@ -35,15 +37,22 @@ MAGIC = b"FINDEXB1"            # 8 bytes: identifies our binary format, version 
 assert array("I").itemsize == 4, "this format needs 4-byte unsigned ints"
 
 
-def detect_format(path: str | Path) -> str | None:
-    """Look at the first bytes of a file. Returns 'binary', 'pickle' or None."""
-    with Path(path).open("rb") as f:
-        head = f.read(len(MAGIC))
+def _format_of(head: bytes) -> str | None:
+    """Identify a format from a file's first bytes: 'binary', 'pickle' or None."""
     if head == MAGIC:
         return "binary"
     if head[:1] == b"\x80":     # every pickle protocol >= 2 starts with this opcode
         return "pickle"
     return None
+
+
+def detect_format(path: str | Path) -> str | None:
+    """Look at the first bytes of a file. Returns 'binary', 'pickle' or None."""
+    path = Path(path)
+    if path.is_dir():           # a folder of .txt files is a corpus, never an index
+        return None
+    with path.open("rb") as f:
+        return _format_of(f.read(len(MAGIC)))
 
 
 # --- pickle -----------------------------------------------------------------------------
@@ -80,16 +89,16 @@ def _read_array(f: BinaryIO, n: int) -> array:
 
 
 def _save_binary(index: Index, f: BinaryIO) -> None:
-    n_docs = index.n_docs
+    n_docs = index.num_docs
     if set(index.doc_meta) != set(range(n_docs)) or set(index.doc_lengths) != set(range(n_docs)):
         raise ValueError("doc ids must be exactly 0..n-1")
 
-    terms = list(index.postings)
-    df = array("I", (len(index.postings[t]) for t in terms))   # postings per term
+    terms = list(index)
+    df = array("I", (index.df(t) for t in terms))   # postings per term
     doc_ids = array("I")                                        # all postings, term by term
     tfs = array("I")
     for term in terms:
-        for p in index.postings[term]:
+        for p in index[term]:
             doc_ids.append(p.doc_id)
             tfs.append(p.tf)
     lengths = array("I", (index.doc_lengths[i] for i in range(n_docs)))
@@ -147,17 +156,39 @@ def save(index: Index, path: str | Path, fmt: str = "binary") -> None:
         (_save_pickle if fmt == "pickle" else _save_binary)(index, f)
 
 
+@contextmanager
+def open_index(path: str | Path, *, trust_pickle: bool = False) -> Iterator[Index]:
+    """Open a saved index for the duration of a `with` block:
+
+        with open_index("index.bin") as ix:
+            print(ix["cat"])
+
+    The file is closed when the block ends -- normally or by an exception --
+    because the close sits in `finally`. Today the whole index is read up front,
+    so the file isn't strictly needed inside the block. Keeping it open is what
+    lets a future version mmap the postings and read them lazily (the Lab 2
+    Stretch) without changing a single caller.
+    """
+    f = Path(path).open("rb")
+    try:
+        fmt = _format_of(f.read(len(MAGIC)))
+        f.seek(0)
+        if fmt is None:
+            raise ValueError(f"{path} is not a findex index file")
+        if fmt == "pickle" and not trust_pickle:
+            raise PermissionError(
+                "this is a pickle file, and loading a pickle can run arbitrary code. "
+                "Pass trust_pickle=True (CLI: --trust-pickle) only if you created it yourself."
+            )
+        yield _load_pickle(f) if fmt == "pickle" else _load_binary(f)
+    finally:
+        f.close()
+
+
 def load(path: str | Path, *, trust_pickle: bool = False) -> Index:
-    fmt = detect_format(path)
-    if fmt is None:
-        raise ValueError(f"{path} is not a findex index file")
-    if fmt == "pickle" and not trust_pickle:
-        raise PermissionError(
-            "this is a pickle file, and loading a pickle can run arbitrary code. "
-            "Pass trust_pickle=True (CLI: --trust-pickle) only if you created it yourself."
-        )
-    with Path(path).open("rb") as f:
-        return _load_pickle(f) if fmt == "pickle" else _load_binary(f)
+    """Load a whole index and return it; the file is closed before this returns."""
+    with open_index(path, trust_pickle=trust_pickle) as index:
+        return index
 
 
 # --- benchmark -------------------------------------------------------------------------------
@@ -178,7 +209,7 @@ def main() -> None:
     args = ap.parse_args()
 
     index = build_index(islice(iter_documents(args.root), args.limit))
-    print(f"indexed {index.n_docs} documents, {len(index.postings)} terms\n")
+    print(f"indexed {index.num_docs} documents, {len(index)} terms\n")
     print(f"{'format':<10}{'size MB':>10}{'save s':>10}{'load s':>10}  round-trip")
     with tempfile.TemporaryDirectory() as tmp:
         for fmt in FORMATS:

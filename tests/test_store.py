@@ -102,3 +102,49 @@ def test_pickle_saved_by_the_cli_loads_elsewhere(tmp_path):
     cmd += ["--out", str(out), "--format", "pickle"]
     subprocess.run(cmd, check=True, capture_output=True)
     assert load(out, trust_pickle=True).get("cat")[0].doc_id == 0
+
+def test_a_corpus_folder_is_not_an_index(tmp_path):
+    assert detect_format(tmp_path) is None
+
+
+# --- Lab 3 M1: open_index context manager -------------------------------------------------
+
+from findex.store import open_index
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_open_index_yields_the_index(idx, tmp_path, fmt):
+    path = tmp_path / "idx"
+    save(idx, path, fmt)
+    with open_index(path, trust_pickle=True) as ix:
+        assert ix == idx and "cat" in ix
+
+
+def test_open_index_closes_the_file_even_on_exception(idx, tmp_path, monkeypatch):
+    path = tmp_path / "idx"
+    save(idx, path)
+    opened = []
+    real_open = Path.open
+
+    def spy(self, *args, **kwargs):
+        f = real_open(self, *args, **kwargs)
+        opened.append(f)
+        return f
+
+    monkeypatch.setattr(Path, "open", spy)
+    with pytest.raises(RuntimeError):
+        with open_index(path):
+            raise RuntimeError("boom inside the with-block")
+    assert opened and all(f.closed for f in opened)
+
+
+def test_open_index_closes_the_file_when_loading_fails(tmp_path, monkeypatch):
+    path = tmp_path / "junk"
+    path.write_bytes(b"not an index at all")
+    opened = []
+    real_open = Path.open
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: opened.append(real_open(self, *a, **k)) or opened[-1])
+    with pytest.raises(ValueError):
+        with open_index(path):
+            pass
+    assert opened and all(f.closed for f in opened)

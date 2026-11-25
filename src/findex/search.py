@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import time
+import tracemalloc
 from collections.abc import Callable
 from functools import partial
 from itertools import islice
@@ -111,7 +112,7 @@ def term_ids(index: Index, word: str, ops: dict[str, Op]) -> DocIds | None:
     """
     result: DocIds | None = None
     for tok in tokenize(word):
-        ids = [p.doc_id for p in index.get(tok)]
+        ids = [p.doc_id for p in index.get(tok, [])]
         result = ids if result is None else ops["AND"](result, ids)
     return result
 
@@ -140,7 +141,7 @@ def evaluate(index: Index, query: str, engine: str = "merge") -> DocIds:
             continue
         if result is None:
             # first operand: "NOT a" means "all documents minus a"
-            result = ops["NOT"](list(range(index.n_docs)), ids) if pending == "NOT" else ids
+            result = ops["NOT"](list(range(index.num_docs)), ids) if pending == "NOT" else ids
         else:
             result = ops[pending](result, ids)
         pending = "AND"
@@ -167,7 +168,7 @@ def best_of(fn: Callable[[], object], repeats: int = 7) -> float:
 
 
 def benchmark(index: Index) -> None:
-    by_df = sorted(index.postings, key=lambda t: len(index.postings[t]))
+    by_df = sorted(index, key=index.df)
     rare, common = by_df[:2], by_df[-2:]
     cases = {
         "2 most common": (common[0], common[1]),
@@ -176,8 +177,8 @@ def benchmark(index: Index) -> None:
     }
     print(f"{'case':<15}{'terms (doc freq)':<42}{'op':<5}{'merge µs':>11}{'set µs':>10}")
     for name, (t1, t2) in cases.items():
-        a = [p.doc_id for p in index.get(t1)]
-        b = [p.doc_id for p in index.get(t2)]
+        a = [p.doc_id for p in index.get(t1, [])]
+        b = [p.doc_id for p in index.get(t2, [])]
         label = f"{t1}({len(a)}), {t2}({len(b)})"
         for op in ("AND", "OR"):
             merge_fn, set_fn = ENGINES["merge"][op], ENGINES["set"][op]
@@ -197,21 +198,26 @@ def main() -> None:
     ap.add_argument("--trust-pickle", action="store_true", help="allow loading a pickle index (only files you created yourself!)")
     args = ap.parse_args()
 
+    tracemalloc.start()
     t0 = time.perf_counter()
     if detect_format(args.source):
         index = load(args.source, trust_pickle=args.trust_pickle)
-        print(f"loaded {index.n_docs} documents in {time.perf_counter() - t0:.2f}s")
+        print(f"loaded {index.num_docs} documents in {time.perf_counter() - t0:.2f}s")
     else:
         index = build_index(islice(iter_documents(args.source), args.limit))
-        print(f"indexed {index.n_docs} documents in {time.perf_counter() - t0:.2f}s")
+        print(f"indexed {index.num_docs} documents in {time.perf_counter() - t0:.2f}s")
 
     if args.bench:
+        tracemalloc.stop()  # tracing would distort the timings
         benchmark(index)
         return
     t0 = time.perf_counter()
     hits = evaluate(index, args.query, args.engine)
     ms = (time.perf_counter() - t0) * 1000
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
     print(f"{len(hits)} results for {args.query!r} ({args.engine}, {ms:.2f} ms)")
+    print(f"peak memory: {peak / 1e6:.1f} MB")
     for doc_id in hits[: args.top]:
         meta = index.doc_meta[doc_id]
         print(f"  [{doc_id}] {meta.title}  ({meta.ext_id})")

@@ -9,8 +9,9 @@ import argparse
 import time
 import tracemalloc
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from functools import cached_property
 from itertools import islice
 from pathlib import Path
 
@@ -31,19 +32,80 @@ class DocMeta:
     title: str
 
 
-@dataclass(slots=True)
-class Index:
-    postings: dict[str, list[Posting]]  # term -> postings, sorted by doc_id
-    doc_lengths: dict[int, int]         # doc_id -> number of tokens (BM25 needs it in Lab 3)
-    doc_meta: dict[int, DocMeta]        # doc_id -> info for display
+class Index(Mapping[str, list[Posting]]):
+    """An inverted index: term -> postings, sorted by doc_id.
 
+    Behaves like a read-only dict of postings, because it IS a Mapping:
+        len(ix)       number of distinct terms
+        "cat" in ix   is the term indexed?
+        ix["cat"]     its postings (KeyError if absent)
+        for t in ix   every term
+        ix.get("cat", [])   postings or a default -- inherited from Mapping
+
+    Treat it as immutable once built: avg_doc_length is computed once and cached.
+    """
+
+    # No __slots__ here: cached_property stores its value in the instance __dict__.
+    # Slots pay off for millions of Postings, not for one Index.
+
+    def __init__(
+        self,
+        postings: dict[str, list[Posting]],
+        doc_lengths: dict[int, int],
+        doc_meta: dict[int, DocMeta],
+    ) -> None:
+        self.postings = postings          # term -> postings, sorted by doc_id
+        self.doc_lengths = doc_lengths    # doc_id -> number of tokens
+        self.doc_meta = doc_meta          # doc_id -> info for display
+
+    # --- the three methods Mapping requires; it derives the rest from these ----------
+    def __getitem__(self, term: str) -> list[Posting]:
+        return self.postings[term]        # KeyError for unknown terms, like a dict
+
+    def __len__(self) -> int:
+        return len(self.postings)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.postings)
+
+    # --- overrides ---------------------------------------------------------------------
+    def __contains__(self, term: object) -> bool:
+        # Mapping's version does `try: self[term] except KeyError`; a direct dict
+        # lookup is faster and clearer.
+        return term in self.postings
+
+    def __eq__(self, other: object) -> bool:
+        # Mapping.__eq__ would compare postings only, so two indexes with different
+        # documents could compare equal. Compare everything instead.
+        if not isinstance(other, Index):
+            return NotImplemented
+        return (self.postings, self.doc_lengths, self.doc_meta) == (
+            other.postings, other.doc_lengths, other.doc_meta
+        )
+
+    __hash__ = None  # mutable contents + custom __eq__ => unhashable, like dict
+
+    def __repr__(self) -> str:
+        return (f"{type(self).__name__}(terms={len(self):,}, docs={self.num_docs:,}, "
+                f"avg_doc_length={self.avg_doc_length:.1f})")
+
+    # --- statistics ranking needs ----------------------------------------------------------
     @property
-    def n_docs(self) -> int:
+    def num_docs(self) -> int:
         return len(self.doc_meta)
 
-    def get(self, term: str) -> list[Posting]:
-        """Postings for a term, or [] if unknown. Never inserts anything."""
-        return self.postings.get(term, [])
+    @cached_property
+    def avg_doc_length(self) -> float:
+        # O(num_docs) once, then a plain attribute lookup: BM25 reads it for every posting.
+        return sum(self.doc_lengths.values()) / self.num_docs if self.num_docs else 0.0
+
+    def doc_length(self, doc_id: int) -> int:
+        return self.doc_lengths[doc_id]
+
+    def df(self, term: str) -> int:
+        """Document frequency: how many documents contain the term (0 if none)."""
+        postings = self.postings.get(term)
+        return len(postings) if postings is not None else 0
 
 
 def build_index(docs: Iterable[Document]) -> Index:
@@ -79,9 +141,9 @@ def main() -> None:
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    n_postings = sum(len(p) for p in index.postings.values())
-    print(f"documents:    {index.n_docs}")
-    print(f"terms:        {len(index.postings)}")
+    n_postings = sum(len(p) for p in index.values())
+    print(f"documents:    {index.num_docs}")
+    print(f"terms:        {len(index)}")
     print(f"postings:     {n_postings}")
     print(f"elapsed:      {elapsed:.2f}s")
     print(f"peak memory:  {peak / 1e6:.1f} MB")
@@ -93,7 +155,7 @@ def main() -> None:
         print(f"saved:        {args.out} ({args.format}, "
               f"{args.out.stat().st_size / 1e6:.1f} MB, {time.perf_counter() - t0:.2f}s)")
     if args.term:
-        plist = index.get(args.term)
+        plist = index.get(args.term, [])
         print(f"'{args.term}': in {len(plist)} documents; first 5:")
         for p in plist[:5]:
             print(f"  doc {p.doc_id} ({index.doc_meta[p.doc_id].title!r}) tf={p.tf}")

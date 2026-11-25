@@ -1,4 +1,16 @@
+# corpus and generated indexes
 /data/
 /dev/
 index.bin
 *.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
