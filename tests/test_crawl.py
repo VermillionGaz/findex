@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import aclosing
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 import pytest
@@ -400,3 +401,80 @@ def test_a_crawl_starts_and_stops_its_own_parsing_processes() -> None:
     before = set(mp.active_children())  # e.g. the shared pool's workers, if started
     assert sorted(asyncio.run(main())) == ["A", "Home"]
     assert set(mp.active_children()) == before  # the crawl's own pool has shut down
+
+
+# --- findex crawl (the command) ------------------------------------------------------------
+@pytest.fixture
+def fake_site(monkeypatch: pytest.MonkeyPatch) -> FakeWeb:
+    """The `findex crawl` command builds its own HTTP client: make it talk to a fake site."""
+    import findex.crawler.crawl
+
+    web = FakeWeb(
+        {
+            f"{SITE}/": html("Home", "/event-loop", "/gone", "/private/x", body="<p>Welcome.</p>"),
+            f"{SITE}/event-loop": html("Event loop", body="<p>The event loop runs coroutines.</p>"),
+            f"{SITE}/private/x": html("Secret"),
+            f"{SITE}/robots.txt": "User-agent: *\nDisallow: /private/\n",
+        }
+    )
+    monkeypatch.setattr(
+        findex.crawler.crawl, "make_client", lambda: make_client(httpx.MockTransport(web.handler))
+    )
+    return web
+
+
+def test_crawl_command_end_to_end(fake_site: FakeWeb, tmp_path: Path) -> None:
+    import json
+
+    from typer.testing import CliRunner
+
+    from findex.cli import app
+
+    runner = CliRunner()
+    out = tmp_path / "crawl.jsonl"
+    result = runner.invoke(app, ["crawl", SITE, "--out", str(out), "--delay", "0"])
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout == ""  # everything goes to stderr: progress, summary, warnings
+    assert "crawled 2 pages" in result.stderr
+    assert "404" not in result.stderr  # an everyday 404 goes to the log file, not the screen
+
+    records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert sorted(r["title"] for r in records) == ["Event loop", "Home"]
+    assert set(records[0]) == {"id", "url", "title", "text", "fetched_at"}
+
+    log = (tmp_path / "crawl.log").read_text(encoding="utf-8")
+    assert f"200 {SITE}/event-loop" in log  # every URL's outcome is logged
+    assert f"404 {SITE}/gone" in log
+    assert f"robots.txt disallows {SITE}/private/x" in log
+    assert f"{SITE}/private/x" not in fake_site.requests  # and robots.txt was obeyed
+
+    # The output is a corpus: findex index reads it, findex search finds the pages.
+    index = tmp_path / "crawl.bin"
+    assert runner.invoke(app, ["index", str(out), "-o", str(index)]).exit_code == 0
+    found = runner.invoke(app, ["search", str(index), "coroutines", "--json"])
+    assert [json.loads(line)["title"] for line in found.stdout.splitlines()] == ["Event loop"]
+
+
+def test_crawl_command_max_pages(fake_site: FakeWeb, tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from findex.cli import app
+
+    out = tmp_path / "c.jsonl"
+    result = CliRunner().invoke(
+        app, ["crawl", SITE, "-o", str(out), "--delay", "0", "--max-pages", "1"]
+    )
+    assert result.exit_code == 0 and len(out.read_text().splitlines()) == 1
+
+
+def test_crawl_command_errors(fake_site: FakeWeb, tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from findex.cli import app
+
+    runner = CliRunner()
+    bad = runner.invoke(app, ["crawl", "not-a-url", "-o", str(tmp_path / "x.jsonl")])
+    assert bad.exit_code == 2 and "http(s) URLs" in bad.stderr
+    fake_site.pages[f"{SITE}/robots.txt"] = "User-agent: *\nDisallow: /\n"
+    blocked = runner.invoke(app, ["crawl", SITE, "-o", str(tmp_path / "y.jsonl"), "--delay", "0"])
+    assert blocked.exit_code == 1 and "no pages crawled" in blocked.stderr

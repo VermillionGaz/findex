@@ -24,14 +24,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import multiprocessing as mp
 import os
 import time
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, Iterable
 from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, TextIO
 
 import httpx
 
@@ -67,7 +70,13 @@ class CrawlStats:
     skipped: int = 0  # blocked by robots.txt, not HTML, noindex
     in_flight: int = 0  # requests currently waiting for a response
     queued: int = 0  # URLs in the frontier
+    last_url: str = ""  # the most recent page yielded
     started: float = field(default_factory=time.monotonic)
+
+    @property
+    def pages_per_second(self) -> float:
+        elapsed = time.monotonic() - self.started
+        return self.pages / elapsed if elapsed > 0 else 0.0
 
 
 class _Host:
@@ -103,7 +112,7 @@ async def crawl(
     client: httpx.AsyncClient | None = None,
     executor: Executor | None = None,
     stats: CrawlStats | None = None,
-) -> AsyncIterator[Page]:
+) -> AsyncGenerator[Page]:
     """Crawl from the seeds and yield up to max_pages pages, as they are fetched.
 
     allowed_domains defaults to the seeds' hosts (subdomains included). Pass a client
@@ -234,7 +243,11 @@ class _Crawler:
             return
         if not result.ok:
             self.stats.errors += 1
-            log.warning(
+            # A 404 is an everyday event in crawling: log file only. Failures that may mean
+            # trouble -- no response at all, or 5xx after every retry -- also show on screen.
+            serious = result.status is None or result.status >= 500
+            log.log(
+                logging.WARNING if serious else logging.INFO,
                 "%s %s (%s, %d attempts)",
                 result.status or "---",
                 url,
@@ -284,6 +297,7 @@ class _Crawler:
         if self.stats.pages >= self.max_pages:
             return
         self.stats.pages += 1
+        self.stats.last_url = page.url
         log.info(
             "%s %s (%d bytes, %.2fs)", result.status, page.url, len(result.content), result.elapsed
         )
@@ -319,3 +333,34 @@ class _borrowed:
 
     async def __aexit__(self, *exc: object) -> None:
         pass
+
+
+async def crawl_to_jsonl(path: Path, seeds: Iterable[str], **options: Any) -> int:
+    """Crawl, writing each page to `path` as one JSON line the moment it arrives: the
+    format `findex index` reads. Returns the number of pages written.
+
+    Pages are never buffered, so an interrupted crawl keeps everything fetched so far.
+    The writes go through a thread: even a slow disk can't stall the event loop.
+    """
+    written = 0
+    with path.open("w", encoding="utf-8") as f:
+        async with contextlib.aclosing(crawl(seeds, **options)) as pages:
+            async for page in pages:
+                line = json.dumps(
+                    {
+                        "id": page.url,
+                        "url": page.url,
+                        "title": page.title or page.url,
+                        "text": page.text,
+                        "fetched_at": page.fetched_at.isoformat(),
+                    },
+                    ensure_ascii=False,
+                )
+                await asyncio.to_thread(_write_line, f, line)
+                written += 1
+    return written
+
+
+def _write_line(f: TextIO, line: str) -> None:
+    f.write(line + "\n")
+    f.flush()  # each page is on disk as soon as it's written, not when the crawl ends

@@ -12,9 +12,11 @@ output can be piped into other programs without noise.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
 from collections import Counter
 from enum import StrEnum
 from pathlib import Path
@@ -22,6 +24,7 @@ from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
@@ -35,6 +38,9 @@ from rich.table import Table
 from rich.text import Text
 
 from .corpus import corpus_bytes, plan_chunks
+from .crawler import USER_AGENT
+from .crawler.crawl import CrawlStats, crawl_to_jsonl
+from .crawler.urls import canonicalize
 from .index import Index
 from .parallel import CHUNKS_PER_WORKER, build_partials, merge
 from .query import ParseError, parse
@@ -77,10 +83,15 @@ def main(
 ) -> None:
     """Runs before every subcommand; configures logging once for the whole program."""
     level = {0: logging.WARNING, 1: logging.INFO}.get(verbose, logging.DEBUG)
+    screen = RichHandler(console=err, show_time=False, show_path=False)
+    # The handler's own level decides what reaches the screen. (A logger's level only
+    # filters records logged *at* that logger: records from a child logger set to INFO,
+    # like the crawler for its log file, would otherwise all reach the screen too.)
+    screen.setLevel(level)
     logging.basicConfig(
         level=level,
         format="%(name)s: %(message)s",
-        handlers=[RichHandler(console=err, show_time=False, show_path=False)],
+        handlers=[screen],
         force=True,  # replace any handlers left from an earlier run (tests run many)
     )
 
@@ -168,6 +179,99 @@ def index_cmd(
         f"indexed [bold]{index.num_docs:,}[/] documents, {len(index):,} terms "
         f"-> {out_path} ({out_path.stat().st_size / 1e6:.1f} MB)"
     )
+
+
+# --- findex crawl -------------------------------------------------------------------------
+def _crawl_display(stats: CrawlStats, out_path: Path) -> Table:
+    table = Table(title=f"crawling -> {out_path}", show_header=False, box=None, padding=(0, 2))
+    table.add_column(style="bold")
+    table.add_column(justify="right")
+    table.add_row("pages", f"{stats.pages:,}")
+    table.add_row("pages/s", f"{stats.pages_per_second:.1f}")
+    table.add_row("fetched", f"{stats.fetched:,}")
+    table.add_row("errors", f"{stats.errors:,}")
+    table.add_row("skipped", f"{stats.skipped:,}")
+    table.add_row("in flight", f"{stats.in_flight:,}")
+    table.add_row("queued", f"{stats.queued:,}")
+    table.add_row("latest", Text(stats.last_url[-70:], style="dim"))
+    return table
+
+
+@app.command("crawl")
+def crawl_cmd(
+    seeds: Annotated[list[str], typer.Argument(help="Where to start: one or more URLs.")],
+    out_path: Annotated[Path, typer.Option("--out", "-o", help="JSON-lines output.")] = Path(
+        "data/crawl.jsonl"
+    ),
+    max_pages: Annotated[int, typer.Option(min=1, help="Stop after this many pages.")] = 500,
+    concurrency: Annotated[int, typer.Option(min=1, help="Requests in flight at most.")] = 10,
+    per_host: Annotated[int, typer.Option(min=1, help="Requests in flight per site at most.")] = 2,
+    delay: Annotated[
+        float,
+        typer.Option(min=0, help="Seconds between requests to one site (or its Crawl-delay)."),
+    ] = 1.0,
+    domain: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Allowed domain (repeatable; subdomains included) [default: the seeds']."
+        ),
+    ] = None,
+) -> None:
+    """Crawl websites politely and save the pages for `findex index`.
+
+    Obeys robots.txt, identifies itself, rate-limits per site, and stops at --max-pages.
+    Only crawl sites you are allowed to.
+    """
+    if not all(canonicalize(s) for s in seeds):
+        _fail("seeds must be http(s) URLs", code=2)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path = out_path.with_suffix(".log")
+    stats = CrawlStats()
+
+    # Every URL's outcome goes to the log file; the screen shows only warnings (or -v).
+    crawler_log = logging.getLogger("findex.crawler")
+    file_log = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    file_log.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+    crawler_log.addHandler(file_log)
+    old_level = crawler_log.level
+    crawler_log.setLevel(logging.INFO)
+
+    err.print(f"identifying as [bold]{USER_AGENT}[/]", highlight=False)
+    started = time.monotonic()
+    try:
+        with Live(
+            get_renderable=lambda: _crawl_display(stats, out_path),
+            console=err,
+            refresh_per_second=4,
+            transient=True,
+        ):
+            pages = asyncio.run(
+                crawl_to_jsonl(
+                    out_path,
+                    seeds,
+                    max_pages=max_pages,
+                    concurrency=concurrency,
+                    per_host=per_host,
+                    min_delay=delay,
+                    allowed_domains=domain,
+                    stats=stats,
+                )
+            )
+    except KeyboardInterrupt:
+        err.print(f"[yellow]interrupted[/]: {stats.pages:,} pages saved in {out_path}")
+        raise typer.Exit(130) from None
+    finally:
+        crawler_log.removeHandler(file_log)
+        file_log.close()
+        crawler_log.setLevel(old_level)
+
+    elapsed = time.monotonic() - started
+    err.print(
+        f"crawled [bold]{pages:,}[/] pages in {elapsed:.1f}s ({pages / max(elapsed, 1e-9):.1f}/s), "
+        f"{stats.errors:,} errors, {stats.skipped:,} skipped -> {out_path}; log: {log_path}"
+    )
+    if pages == 0:
+        _fail(f"no pages crawled: see {log_path} (robots.txt, allowed domains, errors)")
 
 
 # --- findex search ------------------------------------------------------------------------
