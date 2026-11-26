@@ -159,3 +159,8 @@ def test_sanity_script_checks_hold_on_a_small_index(capsys):
     assert check_rare_beats_common(idx)
     assert check_saturation(idx)
     assert check_short_beats_long(idx)
+
+
+def test_tfidf_unknown_term_scores_zero(make_index):
+    idx = make_index("cat")
+    assert TfIdf()("zzz", Posting(0, 1), idx) == 0.0

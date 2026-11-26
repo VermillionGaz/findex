@@ -115,9 +115,9 @@ def idx():
     return build_index(Document(f"d{i}", Path(f"d{i}"), t, f"T{i}") for i, t in enumerate(TEXTS))
 
 
-@pytest.fixture(params=["merge", "set"])
-def ops(request):
-    return ENGINES[request.param]
+@pytest.fixture
+def ops(engine):  # `engine` comes from conftest.py: this runs once per engine
+    return ENGINES[engine]
 
 
 def test_phrase_needs_adjacent_words_in_order(idx, ops):

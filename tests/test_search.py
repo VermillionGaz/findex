@@ -15,11 +15,6 @@ def make_index(*texts):
     )
 
 
-@pytest.fixture(params=["merge", "set"])
-def engine(request):
-    return request.param
-
-
 @pytest.fixture
 def idx():
     return make_index(

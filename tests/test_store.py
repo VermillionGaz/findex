@@ -1,4 +1,6 @@
+import json
 import pickle
+import struct
 from pathlib import Path
 
 import pytest
@@ -187,3 +189,49 @@ def test_version_1_files_still_load(idx, tmp_path, monkeypatch):
     save(no_pos, tmp_path / "old")
     monkeypatch.undo()
     assert load(tmp_path / "old") == no_pos
+
+
+# --- Lab 4 M2: corrupted and invalid files fail with a clear error -------------------------
+
+
+def _saved(idx, tmp_path):
+    path = tmp_path / "idx.bin"
+    save(idx, path)
+    return path
+
+
+def test_truncated_file_is_reported(idx, tmp_path):
+    path = _saved(idx, tmp_path)
+    raw = path.read_bytes()
+    for cut in (4, 10):  # ends between two numbers / in the middle of one
+        path.write_bytes(raw[:-cut])  # e.g. a copy or download that stopped early
+        with pytest.raises(ValueError, match="truncated"):
+            load(path)
+
+
+def test_unknown_version_is_reported(idx, tmp_path):
+    path = _saved(idx, tmp_path)
+    raw = path.read_bytes()
+    # same length on purpose: the header's byte length is stored in front of it
+    path.write_bytes(raw.replace(b'"version": 2', b'"version": 9', 1))
+    with pytest.raises(ValueError, match="unsupported index version: 9"):
+        load(path)
+
+
+def test_corrupt_posting_counts_are_reported(idx, tmp_path):
+    path = _saved(idx, tmp_path)
+    raw = path.read_bytes()
+    n = json.loads(raw[16 : 16 + struct.unpack("<Q", raw[8:16])[0]])["n_postings"]
+    path.write_bytes(
+        raw.replace(f'"n_postings": {n}'.encode(), f'"n_postings": {n - 1}'.encode(), 1)
+    )
+    with pytest.raises(ValueError, match="truncated|do not add up"):
+        load(path)
+
+
+def test_cannot_save_an_index_with_gaps_in_doc_ids(idx, tmp_path):
+    from findex.index import Index
+
+    gappy = Index(idx.postings, {0: 1, 5: 1}, {0: idx.doc_meta[0], 5: idx.doc_meta[0]})
+    with pytest.raises(ValueError, match="0..n-1"):
+        save(gappy, tmp_path / "x.bin")

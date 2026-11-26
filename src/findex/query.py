@@ -89,12 +89,17 @@ class Phrase(Query):
     terms: tuple[str, ...]  # normalized tokens, in order
 
     def evaluate(self, index: Index, ops: Ops) -> DocIds:
-        if not index.has_positions:
+        plists = [index.get(t, []) for t in self.terms]
+        if not all(plists):
+            return []  # some word of the phrase occurs nowhere: nothing can match
+        # Check the postings we're about to use, not index.has_positions: an index can
+        # have no postings at all (every document empty), and then has_positions can't
+        # tell how it was built. (Hypothesis found that case.)
+        if not plists[0][0].positions:
             raise ValueError(
                 "phrase queries need positions: rebuild the index without --no-positions"
             )
         # 1. Documents containing ALL the words (cheap: postings merge).
-        plists = [index.get(t, []) for t in self.terms]
         docs = [p.doc_id for p in plists[0]]
         for plist in plists[1:]:
             docs = ops["AND"](docs, [p.doc_id for p in plist])

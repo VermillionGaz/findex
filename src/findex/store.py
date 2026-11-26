@@ -76,7 +76,9 @@ def _load_pickle(f: BinaryIO) -> Index:
 
 
 def _write_array(arr: array[int], f: BinaryIO) -> None:
-    if sys.byteorder == "big":  # the file is always little-endian
+    if (
+        sys.byteorder == "big"
+    ):  # pragma: no cover -- only on big-endian CPUs; files are little-endian
         arr = array("I", arr)
         arr.byteswap()
     arr.tofile(f)
@@ -86,9 +88,11 @@ def _read_array(f: BinaryIO, n: int) -> array[int]:
     arr = array("I")
     try:
         arr.fromfile(f, n)
-    except EOFError as exc:
+    except (EOFError, ValueError) as exc:
+        # EOFError: the file ends between numbers. ValueError: it ends in the MIDDLE of
+        # a 4-byte number ("bytes length not a multiple of item size"). Same cause.
         raise ValueError("index file is truncated") from exc
-    if sys.byteorder == "big":
+    if sys.byteorder == "big":  # pragma: no cover -- only on big-endian CPUs
         arr.byteswap()
     return arr
 

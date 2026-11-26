@@ -14,3 +14,8 @@ __pycache__/
 # IDE
 .idea/
 .vscode/
+
+# test tooling
+.hypothesis/
+.coverage
+htmlcov/
