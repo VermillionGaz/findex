@@ -1,0 +1,109 @@
+{
+  "\"solar system\"": {
+    "Solar System": true,
+    "Jupiter": true,
+    "Sun": true,
+    "Formation and evolution of the Solar System": true,
+    "Neptune": true,
+    "Small solar system body": false,
+    "Planet": false,
+    "Voyager 1": false,
+    "Trans-Neptunian object": false
+  },
+  "world war": {
+    "1943": false,
+    "History of the United States": false,
+    "Victoria Cross for Australia": false,
+    "Human history": true,
+    "History of Japan": false,
+    "World War III": true,
+    "World War": true,
+    "Italian Campaign": false
+  },
+  "photosynthesis": {
+    "Photosynthesis": true,
+    "Leaf": true,
+    "Chlorophyll": true,
+    "Ecosystem": false,
+    "Plant": true,
+    "Phototroph": true,
+    "Cyanobacteria": true,
+    "Transpiration": true
+  },
+  "\"programming language\"": {
+    "Assembly language": false,
+    "Programming language": true,
+    "Esperanto": false,
+    "Computer programming": true,
+    "Object-oriented programming": true,
+    "Interpreter (computing)": true,
+    "DarkBASIC": false,
+    "C (programming language)": true,
+    "Scheme (programming language)": false
+  },
+  "volcano eruption": {
+    "Nevado del Ruiz": false,
+    "Volcano": true,
+    "Mount St. Helens": true,
+    "Mount Vesuvius": true,
+    "Popocatépetl": true,
+    "Eruption": true,
+    "Krakatoa": true,
+    "Mount Etna": true,
+    "Volcanic Explosivity Index": true
+  },
+  "olympic games": {
+    "Olympic Games": true,
+    "Winter Olympic Games": true,
+    "Summer Olympic Games": true,
+    "1896 Summer Olympics": false,
+    "Mario": false,
+    "Ancient Olympic Games": true,
+    "1940 Winter Olympics": false,
+    "1944 Winter Olympics": false
+  },
+  "human heart blood": {
+    "Heart": true,
+    "Pulmonary hypertension": true,
+    "Artery": true,
+    "Sacred Heart": false,
+    "Red blood cell": true,
+    "Vein": true,
+    "Blood vessel": true,
+    "Endocarditis": false
+  },
+  "\"united states\" president": {
+    "History of the United States": true,
+    "Ronald Reagan": true,
+    "Joe Biden": true,
+    "2004": false,
+    "2010s": false,
+    "1930s": false,
+    "Vice President of the United States": true,
+    "1860s": false,
+    "President of the United States": true,
+    "United States presidential line of succession": true
+  },
+  "french revolution": {
+    "Napoleon": true,
+    "France": true,
+    "Iranian Revolution": false,
+    "October 17": false,
+    "March 18": true,
+    "Reign of Terror": true,
+    "French Revolution": true,
+    "A Tale of Two Cities": true,
+    "Revolution": true,
+    "La Marseillaise": false
+  },
+  "piano": {
+    "Piano": true,
+    "Franz Liszt": false,
+    "Ludwig van Beethoven": true,
+    "Piano trio": true,
+    "Piano duet": true,
+    "Piano six hands": true,
+    "Julius Eastman": true,
+    "Piano blues": false
+  }
+}

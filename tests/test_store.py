@@ -132,8 +132,9 @@ def test_open_index_closes_the_file_even_on_exception(idx, tmp_path, monkeypatch
         return f
 
     monkeypatch.setattr(Path, "open", spy)
-    with pytest.raises(RuntimeError), open_index(path):
-        raise RuntimeError("boom inside the with-block")
+    with pytest.raises(RuntimeError):
+        with open_index(path):
+            raise RuntimeError("boom inside the with-block")
     assert opened and all(f.closed for f in opened)
 
 
@@ -143,6 +144,38 @@ def test_open_index_closes_the_file_when_loading_fails(tmp_path, monkeypatch):
     opened = []
     real_open = Path.open
     monkeypatch.setattr(Path, "open", lambda self, *a, **k: opened.append(real_open(self, *a, **k)) or opened[-1])
-    with pytest.raises(ValueError), open_index(path):
-        pass
+    with pytest.raises(ValueError):
+        with open_index(path):
+            pass
     assert opened and all(f.closed for f in opened)
+
+
+# --- Lab 3 M3: positions in the binary format ----------------------------------------------
+
+def test_binary_roundtrip_keeps_positions(idx, tmp_path):
+    assert idx.has_positions
+    save(idx, tmp_path / "idx")
+    back = load(tmp_path / "idx")
+    assert back == idx and back.has_positions
+
+
+def test_binary_roundtrip_without_positions(tmp_path):
+    from findex.corpus import Document
+    no_pos = build_index([Document(doc_id="a", path=Path("a"), text="cat dog cat", title="A")],
+                         positions=False)
+    save(no_pos, tmp_path / "idx")
+    back = load(tmp_path / "idx")
+    assert back == no_pos and not back.has_positions
+
+
+def test_version_1_files_still_load(idx, tmp_path, monkeypatch):
+    """A file written before positions existed must keep working (without phrases)."""
+    import findex.store as store
+    from findex.index import Index, Posting
+
+    no_pos = Index({t: [Posting(p.doc_id, p.tf) for p in pl] for t, pl in idx.items()},
+                   idx.doc_lengths, idx.doc_meta)
+    monkeypatch.setattr(store, "VERSION", 1)     # write the old header version
+    save(no_pos, tmp_path / "old")
+    monkeypatch.undo()
+    assert load(tmp_path / "old") == no_pos

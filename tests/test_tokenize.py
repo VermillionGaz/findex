@@ -41,3 +41,11 @@ def test_quotes_are_stripped():
 
 def test_numbers_and_abbreviations_split():
     assert toks("U.S. 3.14") == ["u", "s", "3", "14"]
+
+
+def test_token_spans_agree_with_tokenize_and_point_at_the_words():
+    from findex.tokenize import token_spans
+    text = "Don’t panic: the U.S. Straße, café and Київ, 3.14!"
+    spans = list(token_spans(text))
+    assert [t for t, _, _ in spans] == list(tokenize(text))
+    assert text[spans[0][1]:spans[0][2]] == "Don’t"

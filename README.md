@@ -82,3 +82,66 @@ Query `the`; it occurs exactly once in both documents.
 The long document is 3796× longer: one mention in it is weaker evidence the document is *about* `the`. BM25's `b` parameter encodes that.
 
 <!-- 3/3 checks hold -->
+
+
+Ten queries (`eval/queries.txt`). For each, the top 5 of both scorers were
+pooled and every pooled article was judged by hand (`eval/judgments.json`):
+should it be in the top 5? precision@5 is relevant ÷ 5.
+
+| # | Query | Matches | TF-IDF P@5 | BM25 P@5 |
+|---|---|---|---|---|
+| 1 | `"solar system"` | 207 | 1.0 | 0.2 |
+| 2 | `world war` | 2,364 | 0.2 | 0.4 |
+| 3 | `photosynthesis` | 67 | 0.8 | 0.8 |
+| 4 | `"programming language"` | 90 | 0.6 | 0.6 |
+| 5 | `volcano eruption` | 60 | 0.8 | 1.0 |
+| 6 | `olympic games` | 242 | 0.6 | 0.6 |
+| 7 | `human heart blood` | 65 | 0.8 | 0.8 |
+| 8 | `"united states" president` | 1,290 | 0.6 | 0.6 |
+| 9 | `french revolution` | 408 | 0.6 | 0.8 |
+| 10 | `piano` | 428 | 0.8 | 0.8 |
+| | **mean** | | **0.68** | **0.66** |
+
+Caching: 
+
+(findex) PS G:\python projects\findex> uv run python -m findex.search index.bin -i -v
+
+DEBUG findex.timing: load took 4940.5 ms
+
+loaded 40000 documents in 4.95s
+
+query> switch
+
+DEBUG findex.search: query switch: cache miss (0 hits, 1 misses, 1/256 entries)
+
+DEBUG findex.timing: Searcher.search took 0.7 ms
+
+157 matches for 'switch', showing 10 (bm25, merge, 0.78 ms)
+   13.018  [7193] Switch  (22812)
+           …switches. Some of these are: DIP switch Reed switch Rocker switch Micro switch Relay switch Rotary switch Surface mount switch Toggle switch Tilt switch Time switch…
+   11.956  [35169] Context switch  (139161)
+           …minimize the time of context switches. A context switch can mean a register context switch, a task context switch, a thread context switch, or a process context switch.…
+   11.743  [35165] Thread switching latency  (139155)
+           …There is no virtual memory switching required in a thread switch, unlike a process switch. Related pages Process switching latency Context switch Computer science
+   10.476  [2319] Nintendo  (7604)
+           …Nintendo 2DS (2013) New Nintendo 3DS (2014) New Nintendo 3DS XL (2014) Nintendo Switch (2017) New Nintendo 2DS XL (2017) Nintendo Switch Lite (2019) Nintendo Switch…
+    9.878  [23598] User interface  (90897)
+           …intuitive, and simple to use. An example of such a user interface is that of the kill switch. A kill switch must shut off the machine at all costs - the idea is to avoid…
+    9.235  [35166] Process switching latency  (139156)
+           …latency is the time needed by the operating system to perform the process context switch to continue executing another process. Related pages Thread switching latency…
+    8.779  [35070] Real-time operating system  (138707)
+           …The basic two designs for RTOS are: Event-driven (priority scheduling) designs: switch tasks only when an event of higher priority needs service, called pre-emptive…
+    8.604  [11818] Transistor  (43338)
+           …useful for electronics that require a switch to be turned on, making it an electronic switch. This rivals the mechanical switch, which requires a constant force pressing…
+    8.283  [35550] Multiplexer  (140606)
+           …An electronic multiplexer can be considered as a multiple-input, single-output switch, and a demultiplexer as a single-input, multiple-output switch. In telecommunications…
+    8.201  [28411] Pikmin (video game)  (114998)
+           …developed and published by Nintendo for the Nintendo GameCube, and later the Wii and Switch. The plot involves an alien captain named Captain Olimar who crash-lands on…
+
+query> switch
+
+DEBUG findex.search: query switch: cache HIT (1 hits, 1 misses, 1/256 entries)
+
+DEBUG findex.timing: Searcher.search took 0.4 ms
+
+(same matches as above)
