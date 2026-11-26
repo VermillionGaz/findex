@@ -1,0 +1,42 @@
+# Pushing a tag like v0.4.0 builds the wheel, checks it, and publishes a GitHub Release
+# with the wheel and source archive attached.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write                  # needed to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: The tag must match the version in pyproject.toml
+        run: |
+          version="$(uv version --short)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject.toml version $version"
+            exit 1
+          fi
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uvx --from dist/*.whl findex --help
+          uvx --from dist/*.whl findex index tests/fixtures/smoke --out /tmp/smoke.bin
+          uvx --from dist/*.whl findex search /tmp/smoke.bin "smoke test" --json
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "findex $GITHUB_REF_NAME" --generate-notes

@@ -41,9 +41,13 @@ def timed[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
-def setup_logging(verbose: bool) -> None:
-    """CLI helper: -v shows the timing log (DEBUG); otherwise only warnings."""
+def setup_logging(verbose: bool = False) -> None:
+    """Logging for the `python -m findex.X` research scripts, called once at each one's
+    entry point: status messages (INFO) by default, plus timings (DEBUG) with -v.
+    Everything goes to stderr, leaving stdout for the script's actual output.
+    (The installed `findex` command configures its own logging in cli.py.)"""
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.WARNING,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
+        force=True,
     )

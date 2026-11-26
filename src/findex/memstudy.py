@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import logging
 import pickle
 import sys
 import tempfile
@@ -32,7 +33,10 @@ from itertools import islice
 from pathlib import Path
 
 from .corpus import Document, iter_documents
+from .timing import setup_logging
 from .tokenize import tokenize
+
+log = logging.getLogger("findex.memstudy")
 
 assert array("I").itemsize == 4, "this study needs 4-byte unsigned ints"
 
@@ -215,6 +219,7 @@ def main() -> None:
         help="where to write the temporary pickles (default: a temp dir)",
     )
     args = ap.parse_args()
+    setup_logging()  # once, at the program's entry point
 
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = args.out_dir or Path(tmp)
@@ -222,7 +227,7 @@ def main() -> None:
         for name in VARIANTS:
             # A fresh stream per variant: generators can only be consumed once.
             results.append(measure(name, islice(iter_documents(args.root), args.limit), out_dir))
-            print(f"  {name}: done", file=sys.stderr)
+            log.info("%s: done", name)
 
     # Sanity check: all three representations must hold exactly the same postings.
     first = results[0]

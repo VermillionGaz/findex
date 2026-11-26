@@ -145,3 +145,15 @@ DEBUG findex.search: query switch: cache HIT (1 hits, 1 misses, 1/256 entries)
 DEBUG findex.timing: Searcher.search took 0.4 ms
 
 (same matches as above)
+
+**Coverage: 82%** (`uv run pytest --cov=findex`, branch coverage on). At 100%:
+`tokenize`, `corpus`, `query`, `rank`, `snippets`; `cli` 99%. Not covered, and why:
+
+- The `main()` functions of the Lab 1–3 research scripts (`python -m findex.search`'s
+  interactive mode and benchmark, `findex.index`, `findex.stats`, `findex.store`,
+  `findex.memstudy`, `findex.sanity`, `findex.evalrank`). They are one-off measurement
+  tools whose output is recorded in this README; the logic they call is tested, and the
+  user-facing tool is the `findex` command, which is.
+- The big-endian byte swaps in `store.py`, marked `# pragma: no cover`: they only run on
+  big-endian CPUs.
+- Abstract `raise NotImplementedError` methods, excluded in the coverage config.

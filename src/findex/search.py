@@ -262,7 +262,7 @@ def _show(searcher: Searcher, query: str, args: argparse.Namespace) -> None:
     try:
         tree = parse(query)
     except ParseError as e:
-        print(f"error: {e}")
+        log.error("%s", e)
         return
     if args.explain:
         print(f"parsed: {tree}\n        {tree!r}")
@@ -270,7 +270,7 @@ def _show(searcher: Searcher, query: str, args: argparse.Namespace) -> None:
     try:
         results = searcher.search(query, SCORERS.get(args.scorer), args.top)
     except ValueError as e:  # e.g. a phrase on an index without positions
-        print(f"error: {e}")
+        log.error("%s", e)
         return
     ms = (time.perf_counter() - t0) * 1000
     print(
@@ -342,10 +342,10 @@ def main() -> None:
     t0 = time.perf_counter()
     if detect_format(args.source):
         index = load(args.source, trust_pickle=args.trust_pickle)
-        print(f"loaded {index.num_docs} documents in {time.perf_counter() - t0:.2f}s")
+        log.info("loaded %d documents in %.2fs", index.num_docs, time.perf_counter() - t0)
     else:
         index = build_index(islice(iter_documents(args.source), args.limit))
-        print(f"indexed {index.num_docs} documents in {time.perf_counter() - t0:.2f}s")
+        log.info("indexed %d documents in %.2fs", index.num_docs, time.perf_counter() - t0)
     if args.memory:
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()  # tracing slows everything down; stop it now

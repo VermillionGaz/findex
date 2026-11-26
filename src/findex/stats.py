@@ -11,6 +11,7 @@ from itertools import islice
 from pathlib import Path
 
 from .corpus import iter_documents
+from .timing import setup_logging
 from .tokenize import tokenize
 
 
@@ -46,6 +47,7 @@ def main() -> None:
     ap.add_argument("--eager", action="store_true", help="use the memory-hungry version")
     ap.add_argument("--top", type=int, default=50)
     args = ap.parse_args()
+    setup_logging()  # once, at the program's entry point
 
     fn = stats_eager if args.eager else stats_lazy
     tracemalloc.start()

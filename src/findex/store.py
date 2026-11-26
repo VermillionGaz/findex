@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import pickle
 import struct
 import sys
@@ -25,7 +26,7 @@ from typing import BinaryIO
 
 from .corpus import iter_documents
 from .index import DocMeta, Index, Posting, build_index
-from .timing import timed
+from .timing import setup_logging, timed
 
 # ---------------------------------------------------------------------------------------
 # WARNING: pickle.load() can execute arbitrary code. A malicious pickle file runs its
@@ -35,6 +36,8 @@ from .timing import timed
 # ---------------------------------------------------------------------------------------
 
 FORMATS = ("pickle", "binary")
+log = logging.getLogger("findex.store")
+
 MAGIC = b"FINDEXB1"  # 8 bytes: identifies our binary format
 VERSION = 2  # header version: 1 = no positions, 2 = optional positions
 assert array("I").itemsize == 4, "this format needs 4-byte unsigned ints"
@@ -234,9 +237,10 @@ def main() -> None:
     ap.add_argument("root", type=Path, help="corpus to index")
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
+    setup_logging()  # once, at the program's entry point
 
     index = build_index(islice(iter_documents(args.root), args.limit))
-    print(f"indexed {index.num_docs} documents, {len(index)} terms\n")
+    log.info("indexed %d documents, %d terms", index.num_docs, len(index))
     print(f"{'format':<10}{'size MB':>10}{'save s':>10}{'load s':>10}  round-trip")
     with tempfile.TemporaryDirectory() as tmp:
         for fmt in FORMATS:

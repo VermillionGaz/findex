@@ -1,5 +1,6 @@
 """End-to-end checks on the shared fixture corpus from conftest.py."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -57,23 +58,29 @@ def test_save_load_round_trip_of_the_fixture_index(tiny_index: Index, tmp_path: 
 
 @pytest.mark.slow
 def test_cli_pipeline_end_to_end(corpus_jsonl: Path, tmp_path: Path) -> None:
-    """Build, save, and search through the real command-line entry points, in fresh
-    Python processes -- the closest thing to a user running the tool."""
+    """Build, save, and search through `python -m findex` in fresh Python processes:
+    the closest thing to a user running the installed tool."""
+    import os
     import subprocess
     import sys
 
+    # Child processes on Windows write piped output in the legacy code page unless told
+    # otherwise; UTF-8 everywhere keeps titles like "Київ" intact.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     out = tmp_path / "index.bin"
-    env_python = [sys.executable, "-m"]
+    python_m = [sys.executable, "-m"]
     subprocess.run(
-        [*env_python, "findex.index", str(corpus_jsonl), "--out", str(out)],
+        [*python_m, "findex", "index", str(corpus_jsonl), "--out", str(out)],
         check=True,
         capture_output=True,
+        env=env,
     )
     result = subprocess.run(
-        [*env_python, "findex.search", str(out), "programming language NOT island"],
+        [*python_m, "findex", "search", str(out), "programming language NOT island", "--json"],
         check=True,
         capture_output=True,
         text=True,
         encoding="utf-8",
+        env=env,
     )
-    assert "1 matches" in result.stdout and "Python" in result.stdout
+    assert [json.loads(line)["title"] for line in result.stdout.splitlines()] == ["Python"]

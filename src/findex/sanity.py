@@ -14,6 +14,7 @@ Markdown, ready to paste into the README.
 from __future__ import annotations
 
 import argparse
+import logging
 from itertools import islice
 from pathlib import Path
 
@@ -21,6 +22,9 @@ from .corpus import iter_documents
 from .index import Index, Posting, build_index
 from .rank import BM25, Scorer, TfIdf, score_docs
 from .store import detect_format, load
+from .timing import setup_logging
+
+log = logging.getLogger("findex.sanity")
 
 SCORERS: dict[str, Scorer] = {"BM25": BM25(), "TF-IDF": TfIdf()}
 
@@ -44,7 +48,7 @@ def check_rare_beats_common(index: Index) -> bool:
                 common, b_candidates = term, once
                 break
     if common is None:
-        print("(corpus too small for check 1)\n")
+        log.warning("corpus too small for check 1")
         return False
     common_docs = {p.doc_id for p in index[common]}
 
@@ -60,7 +64,7 @@ def check_rare_beats_common(index: Index) -> bool:
         if rare:
             break
     if rare is None or a_doc is None:
-        print("(no suitable rare term for check 1)\n")
+        log.warning("no suitable rare term for check 1")
         return False
     rare_docs = {p.doc_id for p in index[rare]}
     # Doc B: contains the common term once, not the rare one, length closest to A's,
@@ -152,7 +156,7 @@ def check_short_beats_long(index: Index) -> bool:
         if ratio >= 10:
             break
     if best is None:
-        print("(corpus too small for check 3)\n")
+        log.warning("corpus too small for check 3")
         return False
     term, short, long, ratio = best
 
@@ -188,6 +192,7 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--trust-pickle", action="store_true")
     args = ap.parse_args()
+    setup_logging()  # once, at the program's entry point
 
     if detect_format(args.source):
         index = load(args.source, trust_pickle=args.trust_pickle)

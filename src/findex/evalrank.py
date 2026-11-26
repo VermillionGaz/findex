@@ -26,6 +26,7 @@ from .rank import BM25, Scorer, TfIdf
 from .search import Searcher
 from .snippets import fetch_texts, make_snippet
 from .store import load
+from .timing import setup_logging
 
 K = 5
 SCORERS: dict[str, Scorer] = {"TF-IDF": TfIdf(), "BM25": BM25()}
@@ -147,6 +148,7 @@ def main() -> None:
     ap.add_argument("judgments", type=Path, help="JSON file to read/write judgments")
     ap.add_argument("--trust-pickle", action="store_true")
     args = ap.parse_args()
+    setup_logging()  # once, at the program's entry point
 
     index = load(args.index, trust_pickle=args.trust_pickle)
     queries = read_queries(args.queries)
