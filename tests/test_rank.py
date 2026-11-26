@@ -1,4 +1,3 @@
-import heapq
 import random
 from pathlib import Path
 
@@ -6,7 +5,7 @@ import pytest
 
 from findex.corpus import Document
 from findex.index import Posting, build_index
-from findex.rank import BM25, SearchResult, Scorer, TfIdf, rank, score_docs, top_k
+from findex.rank import BM25, Scorer, SearchResult, TfIdf, rank, score_docs, top_k
 from findex.search import positive_terms, search
 
 
@@ -140,7 +139,11 @@ def test_search_with_only_a_negation_returns_unranked_matches():
 
 
 def test_sanity_script_checks_hold_on_a_small_index(capsys):
-    from findex.sanity import check_rare_beats_common, check_saturation, check_short_beats_long
+    from findex.sanity import (
+        check_rare_beats_common,
+        check_saturation,
+        check_short_beats_long,
+    )
     rng = random.Random(1)
     vocab = [f"w{i}" for i in range(300)]
     weights = [1 / (i + 1) for i in range(300)]

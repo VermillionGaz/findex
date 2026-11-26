@@ -11,8 +11,8 @@ def make(*texts):
 
 def test_postings_are_sorted_and_counted():
     idx = build_index(make("cat dog cat", "dog", "cat bird"))
-    assert idx.get("cat") == [Posting(0, 2), Posting(2, 1)]
-    assert idx.get("dog") == [Posting(0, 1), Posting(1, 1)]
+    assert idx.get("cat") == [Posting(0, 2, (0, 2)), Posting(2, 1, (0,))]
+    assert idx.get("dog") == [Posting(0, 1, (1,)), Posting(1, 1, (0,))]
     ids = [p.doc_id for p in idx.get("cat")]
     assert ids == sorted(ids)
 
@@ -33,7 +33,7 @@ def test_unknown_term_does_not_pollute_index():
 
 def test_accepts_a_generator_and_empty_input():
     assert build_index(iter([])).num_docs == 0
-    assert build_index(d for d in make("x y")).get("x") == [Posting(0, 1)]
+    assert build_index(d for d in make("x y")).get("x") == [Posting(0, 1, (0,))]
 
 
 def test_posting_and_meta_are_hashable_and_slotted():
@@ -44,7 +44,7 @@ def test_posting_and_meta_are_hashable_and_slotted():
 
 def test_matches_term_counts_with_tokenizer_rules():
     idx = build_index(make("Don't don’t DON'T"))
-    assert idx.get("don't") == [Posting(0, 3)]
+    assert idx.get("don't") == [Posting(0, 3, (0, 1, 2))]
 
 # --- Lab 3 M1: Index as a Mapping -------------------------------------------------------
 
@@ -64,9 +64,9 @@ def test_index_is_a_mapping_of_postings():
     assert isinstance(idx, Mapping)
     assert len(idx) == 4                                   # cat, dog, bird, fish
     assert "cat" in idx and "zzz" not in idx
-    assert idx["cat"] == [Posting(0, 2), Posting(2, 1)]
+    assert idx["cat"] == [Posting(0, 2, (0, 2)), Posting(2, 1, (0,))]
     assert set(idx) == {"cat", "dog", "bird", "fish"}
-    assert dict(idx.items())["dog"] == [Posting(0, 1), Posting(1, 1)]  # inherited from Mapping
+    assert dict(idx.items())["dog"] == [Posting(0, 1, (1,)), Posting(1, 1, (0,))]  # inherited from Mapping
 
 
 def test_unknown_term_raises_keyerror_and_does_not_insert():
@@ -111,3 +111,31 @@ def test_equality_covers_metadata_not_just_postings():
     assert a != dict(a.items())          # an Index never equals a plain dict
     with pytest.raises(TypeError):
         hash(a)
+
+
+# --- Lab 3 M3: positions ----------------------------------------------------------------
+
+def test_positions_are_recorded_in_order():
+    idx = build_index(make("to be or not to be"))
+    assert idx["to"] == [Posting(0, 2, (0, 4))]
+    assert idx["be"] == [Posting(0, 2, (1, 5))]
+    assert idx.doc_length(0) == 6 and idx.has_positions
+
+
+def test_without_positions_matches_lab2_behaviour():
+    with_pos = build_index(make("cat dog cat", "dog"))
+    without = build_index(make("cat dog cat", "dog"), positions=False)
+    assert without["cat"] == [Posting(0, 2)] and not without.has_positions
+    assert without.doc_lengths == with_pos.doc_lengths
+    for term in with_pos:
+        assert [(p.doc_id, p.tf) for p in with_pos[term]] == [(p.doc_id, p.tf) for p in without[term]]
+
+
+def test_tf_always_equals_number_of_positions():
+    idx = build_index(make("a b a c a", "b b", "c"))
+    assert all(p.tf == len(p.positions) for plist in idx.values() for p in plist)
+
+
+def test_empty_document_has_length_zero():
+    idx = build_index(make("", "cat"))
+    assert idx.doc_length(0) == 0 and idx.doc_length(1) == 1

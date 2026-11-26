@@ -1,0 +1,13 @@
+# Lab 3 M4 evaluation queries: one per line. Lines starting with # are ignored.
+# Pick topics where you know which articles SHOULD come first. If one returns
+# fewer than 5 matches in your index (label shows the count), replace it.
+"solar system"
+world war
+photosynthesis
+"programming language"
+volcano eruption
+olympic games
+human heart blood
+"united states" president
+french revolution
+piano

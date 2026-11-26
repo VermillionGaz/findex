@@ -13,7 +13,6 @@ from findex.memstudy import (
     SlotPosting,
     as_pairs,
     build_arrays,
-    build_objects,
     count_postings,
     measure,
 )

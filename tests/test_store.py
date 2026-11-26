@@ -132,9 +132,8 @@ def test_open_index_closes_the_file_even_on_exception(idx, tmp_path, monkeypatch
         return f
 
     monkeypatch.setattr(Path, "open", spy)
-    with pytest.raises(RuntimeError):
-        with open_index(path):
-            raise RuntimeError("boom inside the with-block")
+    with pytest.raises(RuntimeError), open_index(path):
+        raise RuntimeError("boom inside the with-block")
     assert opened and all(f.closed for f in opened)
 
 
@@ -144,7 +143,6 @@ def test_open_index_closes_the_file_when_loading_fails(tmp_path, monkeypatch):
     opened = []
     real_open = Path.open
     monkeypatch.setattr(Path, "open", lambda self, *a, **k: opened.append(real_open(self, *a, **k)) or opened[-1])
-    with pytest.raises(ValueError):
-        with open_index(path):
-            pass
+    with pytest.raises(ValueError), open_index(path):
+        pass
     assert opened and all(f.closed for f in opened)

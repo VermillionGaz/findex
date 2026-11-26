@@ -27,7 +27,6 @@ from .index import Index, build_index
 from .query import ParseError, parse
 from .rank import BM25, SCORERS, Scorer, SearchResult, rank
 from .store import detect_format, load
-from .tokenize import tokenize
 
 DocIds = list[int]  # always sorted ascending, no duplicates
 
