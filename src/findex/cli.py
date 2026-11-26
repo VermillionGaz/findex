@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import Counter
-from collections.abc import Iterator
 from enum import StrEnum
-from itertools import islice
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -35,8 +34,9 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-from .corpus import Document, iter_documents
-from .index import Index, build_index
+from .corpus import plan_chunks
+from .index import Index
+from .parallel import CHUNKS_PER_WORKER, build_partials, merge
 from .query import ParseError, parse
 from .rank import SCORERS
 from .search import Searcher
@@ -96,14 +96,10 @@ def _count_documents(corpus: Path, limit: int | None) -> int | None:
     return sum(1 for _ in corpus.rglob("*.txt"))
 
 
-def _with_progress(
-    docs: Iterator[Document], progress: Progress, total: int | None
-) -> Iterator[Document]:
-    """Pass documents through unchanged, advancing the progress bar for each one."""
-    task = progress.add_task("indexing", total=total)
-    for doc in docs:
-        yield doc
-        progress.advance(task)
+class ExecutorChoice(StrEnum):
+    serial = "serial"
+    threads = "threads"
+    processes = "processes"
 
 
 @app.command("index")
@@ -114,11 +110,20 @@ def index_cmd(
         bool, typer.Option(help="Store word positions (needed for phrase queries).")
     ] = True,
     limit: Annotated[int | None, typer.Option(help="Index only the first N documents.")] = None,
+    executor: Annotated[
+        ExecutorChoice, typer.Option(help="Run the indexing in one thread, threads, or processes.")
+    ] = ExecutorChoice.serial,
+    workers: Annotated[
+        int | None,
+        typer.Option(min=1, help="Threads/processes to use (default: one per CPU core)."),
+    ] = None,
 ) -> None:
     """Build an index from a corpus and save it."""
     if not corpus.exists():
         _fail(f"corpus not found: {corpus}")
     total = _count_documents(corpus, limit)
+    n_workers = 1 if executor is ExecutorChoice.serial else (workers or os.cpu_count() or 1)
+    n_chunks = 16 if executor is ExecutorChoice.serial else CHUNKS_PER_WORKER * n_workers
     columns = (
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -127,8 +132,20 @@ def index_cmd(
         TimeElapsedColumn(),
     )
     with Progress(*columns, console=err, transient=True) as progress:
-        docs = _with_progress(islice(iter_documents(corpus), limit), progress, total)
-        index = build_index(docs, positions=positions)
+        indexing = progress.add_task(
+            f"indexing ({executor.value}, {n_workers} workers)", total=total
+        )
+        chunks = plan_chunks(corpus, n_chunks, limit)
+        log.info("%d chunks, %s executor, %d workers", len(chunks), executor.value, n_workers)
+        partials = build_partials(
+            chunks,
+            executor.value,
+            n_workers,
+            positions,
+            on_chunk_done=lambda part: progress.advance(indexing, part.num_docs),
+        )
+        progress.add_task("merging", total=None)  # no bar: merge can't report progress
+        index = merge(partials)
     if index.num_docs == 0:
         _fail(f"no documents found in {corpus}")
     save(index, out_path)

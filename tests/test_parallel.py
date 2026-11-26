@@ -12,9 +12,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from findex.corpus import iter_documents, plan_chunks, read_chunk
+from findex.corpus import TxtChunk, iter_documents, plan_chunks, read_chunk
 from findex.index import Index, build_index
-from findex.parallel import build_partial, merge
+from findex.parallel import build_index_parallel, build_partial, build_partials, merge
 from findex.store import save
 
 
@@ -100,3 +100,52 @@ def test_chunked_equals_serial_on_random_corpora(
         path.write_text("\n".join(lines), encoding="utf-8")
         lab4 = build_index(iter_documents(path), positions=positions)
         assert saved_bytes(chunked(path, n_chunks, positions)) == saved_bytes(lab4)
+
+
+# --- M2: the executors ---------------------------------------------------------------------
+
+
+@pytest.mark.slow  # starting worker processes ("spawn") takes about a second
+@pytest.mark.parametrize(
+    ("executor", "workers"), [("threads", 1), ("threads", 3), ("processes", 2)]
+)
+def test_every_executor_gives_the_same_index(
+    corpus_jsonl: Path, corpus_dir: Path, executor, workers: int
+) -> None:
+    for corpus in (corpus_jsonl, corpus_dir):
+        lab4 = build_index(iter_documents(corpus))
+        parallel = build_index_parallel(corpus, executor, workers)
+        assert saved_bytes(parallel) == saved_bytes(lab4)
+
+
+def test_results_come_back_in_chunk_order(corpus_jsonl: Path) -> None:
+    chunks = plan_chunks(corpus_jsonl, 8)
+    partials = build_partials(chunks, "threads", workers=4)
+    assert [p.doc_meta for p in partials] == [build_partial(c).doc_meta for c in chunks]
+
+
+def failing_chunks(root: Path, good: list) -> list:
+    """A missing file makes build_partial raise FileNotFoundError inside the worker."""
+    return [TxtChunk(root, (root / "does-not-exist.txt",)), *good]
+
+
+@pytest.mark.parametrize(
+    "executor", ["serial", "threads", pytest.param("processes", marks=pytest.mark.slow)]
+)
+def test_a_failing_worker_raises_its_original_exception(corpus_dir: Path, executor) -> None:
+    chunks = failing_chunks(corpus_dir, plan_chunks(corpus_dir, 4))
+    with pytest.raises(FileNotFoundError, match="does-not-exist") as info:
+        build_partials(chunks, executor, workers=2)
+    if executor == "processes":
+        # The worker's own traceback travels back with the exception, chained as its cause.
+        assert "build_partial" in str(info.value.__cause__)
+
+
+def test_a_failure_cancels_the_chunks_still_waiting(corpus_dir: Path) -> None:
+    good = plan_chunks(corpus_dir, 8) * 5  # 40 more chunks queued behind the failing one
+    finished: list[object] = []
+    with pytest.raises(FileNotFoundError):
+        build_partials(
+            failing_chunks(corpus_dir, good), "threads", 1, on_chunk_done=finished.append
+        )
+    assert len(finished) <= 1  # at most the chunk already running; the rest never started

@@ -12,14 +12,23 @@ those from chunk k-1: the "sorted merge" of postings lists is plain concatenatio
 
 from __future__ import annotations
 
+import logging
+import multiprocessing as mp
+import os
 from array import array
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
+from typing import Literal
 
-from .corpus import Chunk, read_chunk
+from .corpus import Chunk, plan_chunks, read_chunk
 from .index import DocMeta, Index, Posting
 from .timing import timed
 from .tokenize import tokenize
+
+log = logging.getLogger("findex.parallel")
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,3 +126,81 @@ def merge(partials: Iterable[PartialIndex]) -> Index:
         offset += part.num_docs
 
     return Index(postings, doc_lengths, doc_meta)
+
+
+# --- running build_partial on many chunks ----------------------------------------------------
+type ExecutorName = Literal["serial", "threads", "processes"]
+
+CHUNKS_PER_WORKER = 4  # small chunks balance the load: no worker waits on one huge chunk
+
+
+@timed
+def build_partials(
+    chunks: list[Chunk],
+    executor: ExecutorName = "processes",
+    workers: int = 1,
+    positions: bool = True,
+    on_chunk_done: Callable[[PartialIndex], None] | None = None,
+) -> list[PartialIndex]:
+    """build_partial on every chunk, returned in chunk order whatever order they finish in.
+
+    "serial" runs them one by one in this thread; "threads" and "processes" run up to
+    `workers` at a time. If any chunk fails, the remaining ones are cancelled and the
+    original exception is raised here (for processes, with the worker's traceback chained
+    as its __cause__) -- a failed build stops at once instead of hanging or finishing
+    every other chunk first.
+    """
+    work = partial(build_partial, positions=positions)  # picklable: a module-level function
+    if executor == "serial":
+        results: list[PartialIndex] = []
+        for chunk in chunks:
+            results.append(work(chunk))
+            if on_chunk_done:
+                on_chunk_done(results[-1])
+        return results
+
+    pool: Executor
+    if executor == "threads":
+        pool = ThreadPoolExecutor(max_workers=workers)
+    else:
+        # "spawn" on every platform: each worker is a fresh interpreter that imports
+        # findex, as Windows always does. Linux's default ("fork") would hide spawn bugs.
+        pool = ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"))
+
+    by_future = {pool.submit(work, chunk): i for i, chunk in enumerate(chunks)}
+    done: list[PartialIndex | None] = [None] * len(chunks)
+    try:
+        for future in as_completed(by_future):
+            part = future.result()  # re-raises a worker's exception right here
+            done[by_future[future]] = part
+            if on_chunk_done:
+                on_chunk_done(part)
+    except BaseException:  # a worker failed, or Ctrl-C: don't start the chunks still queued
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    assert all(p is not None for p in done)
+    return [p for p in done if p is not None]
+
+
+def build_index_parallel(
+    root: str | Path,
+    executor: ExecutorName = "processes",
+    workers: int | None = None,
+    positions: bool = True,
+    limit: int | None = None,
+    on_chunk_done: Callable[[PartialIndex], None] | None = None,
+) -> Index:
+    """Index a corpus with `workers` threads or processes (default: one per CPU core).
+
+    Gives exactly the index of a single pass (tested), whatever the executor and worker count.
+    """
+    workers = workers or os.cpu_count() or 1
+    if executor == "serial":
+        n_chunks = 1 if on_chunk_done is None else 16  # extra chunks only move a progress bar
+    else:
+        n_chunks = CHUNKS_PER_WORKER * workers
+    chunks = plan_chunks(root, n_chunks, limit)
+    log.info("%d chunks, %s executor, %d workers", len(chunks), executor, workers)
+    partials = build_partials(chunks, executor, workers, positions, on_chunk_done)
+    return merge(partials)

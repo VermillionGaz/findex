@@ -183,3 +183,25 @@ def test_verbosity_levels(
     result = run(*flags, "search", index_file, "volcano", "--json")
     assert ("documents match" in result.stderr) == expect_info
     assert ("took" in result.stderr) == expect_debug
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--executor", "serial"],
+        ["--executor", "threads", "--workers", "3"],
+        pytest.param(["--executor", "processes", "--workers", "2"], marks=pytest.mark.slow),
+    ],
+)
+def test_index_executors_write_identical_files(
+    corpus_jsonl: Path, tmp_path: Path, flags: list[str]
+) -> None:
+    reference, out = tmp_path / "ref.bin", tmp_path / "out.bin"
+    assert run("index", corpus_jsonl, "-o", reference).exit_code == 0
+    result = run("index", corpus_jsonl, "-o", out, *flags)
+    assert result.exit_code == 0, result.stderr
+    assert out.read_bytes() == reference.read_bytes()
+
+
+def test_index_rejects_zero_workers(corpus_jsonl: Path, tmp_path: Path) -> None:
+    assert run("index", corpus_jsonl, "-o", tmp_path / "x", "--workers", "0").exit_code == 2
