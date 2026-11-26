@@ -24,6 +24,7 @@ from typing import BinaryIO
 
 from .corpus import iter_documents
 from .index import DocMeta, Index, Posting, build_index
+from .timing import timed
 
 # ---------------------------------------------------------------------------------------
 # WARNING: pickle.load() can execute arbitrary code. A malicious pickle file runs its
@@ -203,6 +204,7 @@ def open_index(path: str | Path, *, trust_pickle: bool = False) -> Iterator[Inde
         f.close()
 
 
+@timed
 def load(path: str | Path, *, trust_pickle: bool = False) -> Index:
     """Load a whole index and return it; the file is closed before this returns."""
     with open_index(path, trust_pickle=trust_pickle) as index:

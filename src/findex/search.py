@@ -15,18 +15,26 @@ every term that isn't negated.
 from __future__ import annotations
 
 import argparse
+import logging
+import sys
 import time
 import tracemalloc
-from collections.abc import Callable
-from functools import partial
+from collections.abc import Callable, Iterator
+from functools import lru_cache, partial
 from itertools import islice
 from pathlib import Path
 
 from .corpus import iter_documents
 from .index import Index, build_index
-from .query import ParseError, parse
+from .query import ParseError, Query, parse
 from .rank import BM25, SCORERS, Scorer, SearchResult, rank
+from .snippets import ANSI, PLAIN, fetch_texts, make_snippet
 from .store import detect_format, load
+from .timing import setup_logging, timed
+from .tokenize import tokenize
+
+# Not __name__: under `python -m findex.search` that would be "__main__".
+log = logging.getLogger("findex.search")
 
 DocIds = list[int]  # always sorted ascending, no duplicates
 
@@ -123,25 +131,71 @@ def positive_terms(query: str) -> list[str]:
     return parse(query).positive_terms()
 
 
+class Searcher:
+    """Searches one index and remembers recent query results.
+
+    The cache maps a parsed query tree to its matching doc ids. Why the tree and
+    not the query string? Trees are frozen dataclasses, so they're hashable and
+    equal by value: "cat dog", "Cat  dog" and "cat AND dog" all parse to the
+    same tree and share one cache entry.
+
+    Why not @lru_cache on a plain function? lru_cache keys on ALL arguments, so
+    the index would have to be one -- but Index is unhashable (and shouldn't be a
+    cache key anyway). Instead every Searcher wraps its own bound method in its
+    own cache, so each index gets a separate one, freed with the Searcher.
+    """
+
+    def __init__(self, index: Index, engine: str = "merge", cache_size: int = 256) -> None:
+        self.index = index
+        self.engine = engine
+        self._match = lru_cache(maxsize=cache_size)(self._match_uncached)
+        self.last_total = 0      # how many documents matched the most recent search
+
+    def _match_uncached(self, tree: Query) -> tuple[int, ...]:
+        # A tuple, not a list: the cached object is shared by every later caller,
+        # so it must be immutable or one caller could corrupt it for the rest.
+        return tuple(tree.evaluate(self.index, ENGINES[self.engine]))
+
+    def matching(self, tree: Query) -> tuple[int, ...]:
+        """Sorted ids of the documents matching a parsed query (cached)."""
+        hits_before = self._match.cache_info().hits
+        ids = self._match(tree)
+        info = self._match.cache_info()
+        log.debug("query %s: cache %s (%d hits, %d misses, %d/%d entries)", tree,
+                  "HIT" if info.hits > hits_before else "miss",
+                  info.hits, info.misses, info.currsize, info.maxsize)
+        return ids
+
+    @timed
+    def search(self, query: str, scorer: Scorer | None = BM25(), k: int = 10) -> list[SearchResult]:
+        """Top-k documents matching the query, best first.
+
+        scorer=None returns the first k matches unranked (score 0), like Lab 2.
+        (BM25() as a default argument is safe: default values are created once, but
+        a frozen dataclass can't be mutated, so every call sees the same scorer.)
+        """
+        tree = parse(query)
+        ids = self.matching(tree)
+        self.last_total = len(ids)
+        terms = tree.positive_terms()
+        if scorer is None or not terms:
+            # Unranked: either asked for, or nothing to score by (e.g. "NOT cat").
+            return [SearchResult(0.0, d, self.index.doc_meta[d].title) for d in ids[:k]]
+        return rank(self.index, terms, scorer, k, set(ids))
+
+    def cache_clear(self) -> None:
+        self._match.cache_clear()
+
+
 def search(
     index: Index,
     query: str,
-    scorer: Scorer = BM25(),
+    scorer: Scorer | None = BM25(),
     k: int = 10,
     engine: str = "merge",
 ) -> list[SearchResult]:
-    """Top-k documents matching the Boolean query, best first.
-
-    (BM25() as a default argument is safe: default values are created once, but a
-    frozen dataclass can't be mutated, so every call sees the same, unchanged scorer.)
-    """
-    tree = parse(query)
-    candidates = set(tree.evaluate(index, ENGINES[engine]))
-    terms = tree.positive_terms()
-    if not terms:
-        # e.g. "NOT cat": nothing to score by, so the matches come back unranked.
-        return [SearchResult(0.0, d, index.doc_meta[d].title) for d in sorted(candidates)[:k]]
-    return rank(index, terms, scorer, k, candidates)
+    """One-off search without keeping a cache around (tests, scripts)."""
+    return Searcher(index, engine, cache_size=0).search(query, scorer, k)
 
 
 # --- benchmark: merge vs set --------------------------------------------------------------
@@ -175,29 +229,78 @@ def benchmark(index: Index) -> None:
             s = best_of(partial(set_fn, a, b)) * 1e6
             print(f"{name:<15}{label:<42}{op:<5}{m:>11.1f}{s:>10.1f}")
 
+def _queries(args: argparse.Namespace) -> Iterator[str]:
+    yield from args.query
+    if args.interactive:
+        while True:
+            try:
+                q = input("query> ").strip()
+            except EOFError:                 # Ctrl-D (Ctrl-Z Enter on Windows)
+                return
+            if not q:
+                return
+            yield q
+
+
+def _show(searcher: Searcher, query: str, args: argparse.Namespace) -> None:
+    try:
+        tree = parse(query)
+    except ParseError as e:
+        print(f"error: {e}")
+        return
+    if args.explain:
+        print(f"parsed: {tree}\n        {tree!r}")
+    t0 = time.perf_counter()
+    try:
+        results = searcher.search(query, SCORERS.get(args.scorer), args.top)
+    except ValueError as e:                  # e.g. a phrase on an index without positions
+        print(f"error: {e}")
+        return
+    ms = (time.perf_counter() - t0) * 1000
+    print(f"\n{searcher.last_total} matches for {query!r}, showing {len(results)} "
+          f"({args.scorer}, {args.engine}, {ms:.2f} ms)")
+
+    texts = fetch_texts(searcher.index, [r.doc_id for r in results]) if args.snippets else {}
+    mark = ANSI if sys.stdout.isatty() else PLAIN
+    terms = tree.positive_terms()
+    for r in results:
+        print(f"  {r.score:7.3f}  [{r.doc_id}] {r.title}  ({searcher.index.doc_meta[r.doc_id].ext_id})")
+        if r.doc_id in texts:
+            print(f"           {make_snippet(texts[r.doc_id], terms, mark=mark)}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="findex.search")
     ap.add_argument("source", type=Path, help="a saved index file, or a corpus to index")
-    ap.add_argument("query", nargs="?", default="")
+    ap.add_argument("query", nargs="*", help="one or more queries (quote each one)")
+    ap.add_argument("-i", "--interactive", action="store_true",
+                    help="after the given queries, keep reading queries from the keyboard")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--engine", choices=sorted(ENGINES), default="merge")
     ap.add_argument("--top", type=int, default=10, help="how many results to print")
     ap.add_argument("--scorer", choices=[*SCORERS, "none"], default="bm25",
                     help="ranking function; 'none' = unranked Boolean results (Lab 2)")
+    ap.add_argument("--no-snippets", dest="snippets", action="store_false",
+                    help="don't re-read the corpus to show highlighted snippets")
     ap.add_argument("--explain", action="store_true", help="print the parsed query tree")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="show the timing and cache log")
+    ap.add_argument("--memory", action="store_true",
+                    help="measure peak memory while loading (tracemalloc makes loading ~10x slower)")
     ap.add_argument("--bench", action="store_true", help="benchmark merge vs set")
     ap.add_argument("--trust-pickle", action="store_true", help="allow loading a pickle index (only files you created yourself!)")
     args = ap.parse_args()
-
-    if not args.bench:
+    setup_logging(args.verbose)
+    if not (args.query or args.interactive or args.bench):
+        ap.error("give a query, -i for interactive mode, or --bench")
+    for q in args.query:                     # check the queries before loading anything
         try:
-            tree = parse(args.query)
-        except ParseError as e:            # check the query before loading anything
+            parse(q)
+        except ParseError as e:
             ap.error(str(e))
-        if args.explain:
-            print(f"parsed: {tree}\n        {tree!r}")
 
-    tracemalloc.start()
+    if args.memory:
+        tracemalloc.start()
     t0 = time.perf_counter()
     if detect_format(args.source):
         index = load(args.source, trust_pickle=args.trust_pickle)
@@ -205,26 +308,17 @@ def main() -> None:
     else:
         index = build_index(islice(iter_documents(args.source), args.limit))
         print(f"indexed {index.num_docs} documents in {time.perf_counter() - t0:.2f}s")
+    if args.memory:
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()                   # tracing slows everything down; stop it now
+        print(f"peak memory while loading: {peak / 1e6:.1f} MB")
 
     if args.bench:
-        tracemalloc.stop()  # tracing would distort the timings
         benchmark(index)
         return
-    t0 = time.perf_counter()
-    if args.scorer == "none":
-        hits = evaluate(index, args.query, args.engine)
-        results = [SearchResult(0.0, d, index.doc_meta[d].title) for d in hits[: args.top]]
-        summary = f"{len(hits)} results"
-    else:
-        results = search(index, args.query, SCORERS[args.scorer], args.top, args.engine)
-        summary = f"top {len(results)} results"
-    ms = (time.perf_counter() - t0) * 1000
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    print(f"{summary} for {args.query!r} ({args.engine}, {args.scorer}, {ms:.2f} ms)")
-    print(f"peak memory: {peak / 1e6:.1f} MB")
-    for r in results:
-        print(f"  {r.score:7.3f}  [{r.doc_id}] {r.title}  ({index.doc_meta[r.doc_id].ext_id})")
+    searcher = Searcher(index, args.engine)
+    for query in _queries(args):
+        _show(searcher, query, args)
 
 
 if __name__ == "__main__":

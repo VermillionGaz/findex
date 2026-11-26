@@ -23,3 +23,16 @@ def tokenize(text: str) -> Iterator[str]:
     text = unicodedata.normalize("NFC", text).casefold().translate(_APOSTROPHES)
     for m in _TOKEN.finditer(text):  # finditer = lazy; findall would build a list
         yield m.group()
+
+def token_spans(text: str) -> Iterator[tuple[str, int, int]]:
+    """(token, start, end) for every token, with offsets into the NFC form of text.
+
+    Same tokens as tokenize(), but it also says WHERE each one is, which snippets
+    need for highlighting. The difference: here the regex runs before casefolding,
+    so the offsets point into readable text rather than its casefolded copy (which
+    can have a different length: "ß".casefold() == "ss"). Casefolding the match
+    afterwards gives the same token in practice.
+    """
+    text = unicodedata.normalize("NFC", text).translate(_APOSTROPHES)
+    for m in _TOKEN.finditer(text):
+        yield m.group().casefold(), m.start(), m.end()

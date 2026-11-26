@@ -25,7 +25,7 @@ SCORERS: dict[str, Scorer] = {"BM25": BM25(), "TF-IDF": TfIdf()}
 
 
 def _mark(ok: bool) -> str:
-    return "V holds" if ok else " does NOT hold"
+    return "✅ holds" if ok else "❌ does NOT hold"
 
 
 # --- check 1: rare beats common -------------------------------------------------------------

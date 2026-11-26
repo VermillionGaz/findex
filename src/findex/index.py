@@ -16,6 +16,7 @@ from itertools import islice
 from pathlib import Path
 
 from .corpus import Document, iter_documents
+from .timing import setup_logging, timed
 from .tokenize import tokenize
 
 
@@ -119,6 +120,7 @@ class Index(Mapping[str, list[Posting]]):
         return len(postings) if postings is not None else 0
 
 
+@timed
 def build_index(docs: Iterable[Document], *, positions: bool = True) -> Index:
     """One streaming pass over the corpus.
 
@@ -160,7 +162,9 @@ def main() -> None:
     ap.add_argument("--format", choices=("binary", "pickle"), default="binary")
     ap.add_argument("--no-positions", action="store_true",
                     help="don't record token positions (smaller, but no phrase queries)")
+    ap.add_argument("-v", "--verbose", action="store_true", help="show the timing log")
     args = ap.parse_args()
+    setup_logging(args.verbose)
 
     tracemalloc.start()
     t0 = time.perf_counter()
