@@ -200,3 +200,83 @@ In the serial run, the parallelizable build phase is 66% of the time; plan and m
 Speedups are against the same Python's serial run.
 
 ---
+
+### Benchmark (M4)
+
+`benchmarks/bench_crawl.py`: each crawl is a fresh `findex crawl` process; wall time, pages
+and errors come from its own summary; memory is sampled with `psutil`; configurations are
+interleaved, 3 runs each. Windows 11, Python 3.13.18, 12 logical cores, 34 GB RAM.
+
+**The real sites** (4 seeds above, polite limits, 200 pages; median of 3, min–max):
+
+| Concurrency | Pages | Wall (s) | Pages/s | Errors | Peak RSS (crawler) | Peak RSS (with parse workers) |
+|---|---|---|---|---|---|---|
+| 1 (effectively sequential) | 200 | 197.8 (197.7–198.0) | 1.01 | 0 | 62 MB | 206 MB |
+| 5 | 200 | 183.8 (183.6–184.2) | 1.09 | 0 | 64 MB | 207 MB |
+| 20 | 200 | 163.7 (143.8–176.7) | 1.22 | 0 | 63 MB | 208 MB |
+
+A run in asyncio debug mode (`PYTHONASYNCIODEBUG=1`, concurrency 20, 200 pages) logged
+**0** event-loop steps over 100 ms.
+
+**A local site** (this machine, 100 ms added to every response, no politeness limits,
+plus deliberate faults), from `bench_crawl.py local`:
+
+Local site (this machine, 100 ms added to every response, no politeness limits), 200 pages:
+
+| Concurrency | Wall (s) | Pages/s | Speedup | Peak RSS (crawler) |
+|---|---|---|---|---|
+| 1 | 26.7 | 7.5 | 1.0× | 55 MB |
+| 5 | 5.9 | 33.9 | 4.5× | 56 MB |
+| 20 | 2.4 | 83.3 | 11.1× | 58 MB |
+
+### What the numbers say
+
+**Why concurrency barely helped on the real sites.** The limit isn't the network; it's
+our own politeness, and one flaw in how the crawler applies it. Each site allows one
+request start per second, so concurrency 1 ran at almost exactly 1.0 page/s: nearly every
+page came from `docs.python.org`, whose `/3/` index links to hundreds of its own pages.
+Four sites could together reach about 4 pages/s, yet concurrency 20 reached only 1.22. The
+cause is **head-of-line blocking**: the frontier is a single first-in-first-out queue,
+almost all of it `docs.python.org` URLs. A worker takes the next URL and waits for that
+site's turn while holding it, so most of the 20 workers end up queued behind the same site
+while URLs for the other three sit unreachable further back. The small, noisy gain at 20
+(144–177 s) comes from the few workers that happened to hold another site's URL. The fix
+real crawlers use is a queue per site, with free workers picking a site whose turn has
+come. That is the next thing I'd change.
+
+**What the per-host limits cost, and why they stay.** On the local site, without limits,
+the same crawler fetches tens of pages per second. On the real sites, the limits hold it to
+about one page per second per site. That is the point: a documentation site serves people,
+and a crawler that fires 20 requests at once at it is a load spike its operators didn't ask
+for. The cost is time, and time is the cheap side of that trade.
+
+**Why one thread with 20 coroutines beats Lab 5's approach here.** Lab 5's work was
+*computing*, so it needed more cores; this work is *waiting*. A coroutine waiting on the
+network is a small object on the event loop: the crawler's memory stayed at 62–64 MB from 1
+to 20 requests in flight (and on the local site, throughput grew with concurrency at
+unchanged memory). Lab 5's processes cost a whole interpreter each (its 12 worker processes
+took 774 MB) and would sit idle waiting for responses. Threads would work for waiting too,
+because a thread releases the GIL while blocked on a socket, but each needs its own stack
+and OS scheduling; coroutines scale to thousands of open requests.
+
+**A handled failure, with the log to prove it.** The real crawl had no errors to show; its
+log only records redirects (`302 https://packaging.python.org/ -> .../en/latest/`, `301
+https://docs.python.org/license.html -> .../3/license.html`) and the 14 robots blocks. The
+local site injects each failure once per crawl:
+
+The deliberate faults, as handled in crawl.log:
+
+```
+2026-11-26 10:41:17,793 INFO    http://127.0.0.1:56690/flaky: HTTP 503; retry 1/3 in 0.33s
+2026-11-26 10:41:18,233 INFO    200 http://127.0.0.1:56690/flaky (195 bytes, 0.55s)
+2026-11-26 10:41:18,338 INFO    http://127.0.0.1:56690/limited: HTTP 429; retry 1/3 in 1.00s
+2026-11-26 10:41:19,445 INFO    200 http://127.0.0.1:56690/limited (199 bytes, 1.21s)
+2026-11-26 10:41:21,447 INFO    http://127.0.0.1:56690/slow: timeout after 2s; retry 1/3 in 0.39s
+2026-11-26 10:41:21,941 INFO    200 http://127.0.0.1:56690/slow (193 bytes, 2.50s)
+2026-11-26 10:41:22,046 INFO    302 http://127.0.0.1:56690/loop-a -> http://127.0.0.1:56690/loop-b
+2026-11-26 10:41:22,046 INFO    robots.txt disallows http://127.0.0.1:56690/private/secret
+2026-11-26 10:41:24,817 INFO    302 http://127.0.0.1:56690/loop-b -> http://127.0.0.1:56690/loop-a
+```
+A 503 retried after backoff, a 429 that waited exactly its `Retry-After: 1`, a response
+slower than `--timeout 2` abandoned and retried, a redirect loop that ended because the
+second visit to `/loop-a` was already in the `seen` set, and a `robots.txt` block.

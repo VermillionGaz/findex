@@ -68,12 +68,15 @@ SKIP_EXTENSIONS = frozenset(
 )
 
 
-def canonicalize(url: str, base: str | None = None) -> str | None:
-    """The canonical form of url (resolved against base), or None if it's not worth
-    fetching: not http(s), no host, or a file type we can't index.
+def normalize(url: str, base: str | None = None) -> str | None:
+    """The URL to request: url resolved against base, scheme and host lowercased, default
+    port and fragment dropped, query parameters sorted -- but the path kept as written,
+    trailing slash included. None if it's not worth fetching: not http(s), no host, or a
+    file type we can't index.
 
-    Scheme and host lowercased, default port dropped, fragment dropped (it's the same
-    page), trailing slash removed (except the root "/"), query parameters sorted.
+    The path is kept because robots.txt rules match it literally: a page that links to
+    "/private/" must be checked as "/private/", or the rule "Disallow: /private/" would
+    not match a slash-stripped "/private".
     """
     try:
         parts = urlsplit(urljoin(base, url) if base else url)
@@ -86,12 +89,24 @@ def canonicalize(url: str, base: str | None = None) -> str | None:
         return None
     netloc = host if port in (None, DEFAULT_PORTS[scheme]) else f"{host}:{port}"
     path = parts.path or "/"
-    if len(path) > 1 and path.endswith("/"):
-        path = path.rstrip("/") or "/"
-    if any(path.lower().endswith(ext) for ext in SKIP_EXTENSIONS):
+    if any(path.lower().rstrip("/").endswith(ext) for ext in SKIP_EXTENSIONS):
         return None
     query = urlencode(sorted(parse_qsl(parts.query, keep_blank_values=True)), quote_via=quote)
     return urlunsplit((scheme, netloc, path, query, ""))
+
+
+def canonicalize(url: str, base: str | None = None) -> str | None:
+    """The page's identity, for the `seen` set: normalize() plus trailing slash removed
+    (except the root "/"), since "/docs" and "/docs/" are the same page.
+
+    canonicalize("HTTP://Example.org:80/docs/?b=2&a=1#intro") -> "http://example.org/docs?a=1&b=2"
+    """
+    normal = normalize(url, base)
+    if normal is None:
+        return None
+    parts = urlsplit(normal)
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
 
 
 def host_of(url: str) -> str:

@@ -478,3 +478,56 @@ def test_crawl_command_errors(fake_site: FakeWeb, tmp_path: Path) -> None:
     fake_site.pages[f"{SITE}/robots.txt"] = "User-agent: *\nDisallow: /\n"
     blocked = runner.invoke(app, ["crawl", SITE, "-o", str(tmp_path / "y.jsonl"), "--delay", "0"])
     assert blocked.exit_code == 1 and "no pages crawled" in blocked.stderr
+
+
+# --- regression: robots.txt and trailing slashes ------------------------------------------
+# Found by the benchmark smoke test: the crawler stripped the trailing slash from a link to
+# "/private/", requested "/private" (which "Disallow: /private/" doesn't match by the
+# letter), then followed the server's redirect to "/private/" without asking robots.txt.
+PRIVATE_SITE = {
+    f"{SITE}/robots.txt": "User-agent: *\nDisallow: /private/\n",
+    f"{SITE}/private": (301, {"Location": f"{SITE}/private/"}, ""),
+    f"{SITE}/private/": html("Secret"),
+}
+
+
+def test_a_link_is_checked_against_robots_txt_as_written() -> None:
+    web = FakeWeb({f"{SITE}/": html("Home", "/private/")} | PRIVATE_SITE)
+    assert [p.title for p in run_crawl(web, [SITE])] == ["Home"]
+    assert not any("/private" in u for u in web.requests)
+
+
+def test_a_redirect_into_a_disallowed_path_is_not_followed() -> None:
+    web = FakeWeb({f"{SITE}/": html("Home", "/private")} | PRIVATE_SITE)  # no trailing slash
+    stats = CrawlStats()
+    assert [p.title for p in run_crawl(web, [SITE], stats=stats)] == ["Home"]
+    assert f"{SITE}/private" in web.requests  # allowed by the letter of the rule...
+    assert f"{SITE}/private/" not in web.requests  # ...but its redirect target is not
+    assert stats.skipped == 1
+
+
+def test_a_followed_redirect_reports_the_final_url() -> None:
+    web = FakeWeb(
+        {
+            f"{SITE}/": html("Home", "/docs"),
+            f"{SITE}/docs": (301, {"Location": f"{SITE}/docs/"}, ""),
+            f"{SITE}/docs/": html("Docs"),
+        }
+    )
+    urls = {p.title: p.url for p in run_crawl(web, [SITE])}
+    assert urls["Docs"] == f"{SITE}/docs/"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("HTTP://Example.ORG/docs/?b=2&a=1#x", "http://example.org/docs/?a=1&b=2"),  # slash kept
+        ("https://example.org", "https://example.org/"),
+        ("https://example.org/a", "https://example.org/a"),
+        ("https://example.org/files/report.pdf/", None),
+    ],
+)
+def test_normalize_keeps_the_path_as_written(url: str, expected: str | None) -> None:
+    from findex.crawler.urls import normalize
+
+    assert normalize(url) == expected

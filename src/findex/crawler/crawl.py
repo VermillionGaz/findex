@@ -41,7 +41,7 @@ import httpx
 from .fetch import FetchResult, fetch, make_client
 from .html import ParsedPage, parse_html
 from .robots import RobotsCache
-from .urls import canonicalize, host_of, in_domains
+from .urls import canonicalize, host_of, in_domains, normalize
 
 log = logging.getLogger("findex.crawler.crawl")
 
@@ -120,7 +120,7 @@ async def crawl(
     closed here. Likewise `executor`, which parses pages: by default a small process
     pool is started for this crawl and shut down at its end.
     """
-    seed_urls = [u for u in (canonicalize(s) for s in seeds) if u]
+    seed_urls = [u for u in (normalize(s) for s in seeds) if u]
     if not seed_urls:
         raise ValueError("no valid http(s) seed URLs")
     domains = frozenset(d.lower() for d in allowed_domains or (host_of(u) for u in seed_urls))
@@ -207,9 +207,11 @@ class _Crawler:
             self.out.put_nowait(_DONE)
 
     def _enqueue(self, url: str) -> None:
-        if url in self.seen or not in_domains(url, self.domains):
+        """Queue a normalized URL, unless its page was already queued (by any spelling)."""
+        key = canonicalize(url)
+        if key is None or key in self.seen or not in_domains(url, self.domains):
             return
-        self.seen.add(url)
+        self.seen.add(key)
         self.frontier.put_nowait(url)
         self.stats.queued = self.frontier.qsize()
 
@@ -231,12 +233,19 @@ class _Crawler:
             return
         result = await self._polite_fetch(http, url)
 
-        # /docs -> /docs/ canonicalizes back to the URL we just fetched, so the frontier
-        # would skip it as already seen: follow that one redirect here instead.
-        if result.location and canonicalize(result.location) == url:
-            result = await self._polite_fetch(http, result.location)
+        # /docs -> /docs/ is the same page by canonical form, so the frontier would skip
+        # the target as already seen: follow that one redirect here instead -- after
+        # asking robots.txt, like for any other URL.
+        target = normalize(result.location) if result.location else None
+        if target and canonicalize(target) == canonicalize(url):
+            if not await self.robots.allowed(target):
+                self.stats.skipped += 1
+                log.info("robots.txt disallows %s (redirected from %s)", target, url)
+                return
+            log.info("%s %s -> %s (same page: followed)", result.status, url, target)
+            url, result = target, await self._polite_fetch(http, target)
+            target = normalize(result.location) if result.location else None
         if result.location:  # any other redirect: the target is just another link
-            target = canonicalize(result.location)
             if target:
                 self._enqueue(target)
             log.info("%s %s -> %s", result.status, url, result.location)
@@ -314,11 +323,11 @@ def _warm_up(executor: Executor) -> None:
 
 def _digest(content: bytes, charset: str | None, url: str) -> tuple[ParsedPage, list[str]]:
     """The CPU-heavy part of handling a page, run in a worker process: the parsed page, and
-    its links in canonical form, duplicates removed, in page order. Module-level, with
+    its links normalized, duplicates removed, in page order. Module-level, with
     small picklable arguments, so a process pool can run it."""
     html = content.decode(charset or "utf-8", errors="replace")
     page = parse_html(html, url)
-    links = dict.fromkeys(t for t in (canonicalize(link) for link in page.links) if t)
+    links = dict.fromkeys(t for t in (normalize(link) for link in page.links) if t)
     return page, list(links)
 
 

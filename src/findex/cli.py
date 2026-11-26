@@ -40,7 +40,7 @@ from rich.text import Text
 from .corpus import corpus_bytes, plan_chunks
 from .crawler import USER_AGENT
 from .crawler.crawl import CrawlStats, crawl_to_jsonl
-from .crawler.urls import canonicalize
+from .crawler.urls import normalize
 from .index import Index
 from .parallel import CHUNKS_PER_WORKER, build_partials, merge
 from .query import ParseError, parse
@@ -210,6 +210,9 @@ def crawl_cmd(
         float,
         typer.Option(min=0, help="Seconds between requests to one site (or its Crawl-delay)."),
     ] = 1.0,
+    timeout: Annotated[
+        float, typer.Option(min=0.1, help="Seconds before a request is abandoned (then retried).")
+    ] = 10.0,
     domain: Annotated[
         list[str] | None,
         typer.Option(
@@ -222,7 +225,7 @@ def crawl_cmd(
     Obeys robots.txt, identifies itself, rate-limits per site, and stops at --max-pages.
     Only crawl sites you are allowed to.
     """
-    if not all(canonicalize(s) for s in seeds):
+    if not all(normalize(s) for s in seeds):
         _fail("seeds must be http(s) URLs", code=2)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     log_path = out_path.with_suffix(".log")
@@ -253,6 +256,7 @@ def crawl_cmd(
                     concurrency=concurrency,
                     per_host=per_host,
                     min_delay=delay,
+                    timeout=timeout,
                     allowed_domains=domain,
                     stats=stats,
                 )
