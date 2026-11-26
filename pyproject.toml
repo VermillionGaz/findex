@@ -16,6 +16,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "httpx>=0.28",
     "rich>=13.7",
     "typer>=0.15",
 ]
