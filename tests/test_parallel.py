@@ -1,0 +1,102 @@
+"""Chunked indexing (build_partial + merge) must produce exactly the index of one
+serial pass (Lab 4's build_index), however the corpus is cut into chunks."""
+
+from __future__ import annotations
+
+import json
+import pickle
+import tempfile
+from pathlib import Path
+
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from findex.corpus import iter_documents, plan_chunks, read_chunk
+from findex.index import Index, build_index
+from findex.parallel import build_partial, merge
+from findex.store import save
+
+
+def saved_bytes(index: Index) -> bytes:
+    """The index as saved to disk: byte equality also checks term and document order,
+    which == on two Index objects does not (dict equality ignores order)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        save(index, Path(tmp) / "i.bin")
+        return (Path(tmp) / "i.bin").read_bytes()
+
+
+def chunked(corpus: Path, n_chunks: int, positions: bool = True, limit: int | None = None) -> Index:
+    return merge(build_partial(c, positions) for c in plan_chunks(corpus, n_chunks, limit))
+
+
+@pytest.mark.parametrize("positions", [True, False])
+def test_serial_build_is_identical_to_lab4(corpus_jsonl: Path, positions: bool) -> None:
+    """The lab's required test: merge([build_partial(everything)]) == build_index(...)."""
+    lab4 = build_index(iter_documents(corpus_jsonl), positions=positions)
+    serial = merge([build_partial(plan_chunks(corpus_jsonl, 1)[0], positions)])
+    assert serial == lab4
+    assert saved_bytes(serial) == saved_bytes(lab4)
+
+
+@pytest.mark.parametrize("n_chunks", [1, 2, 3, 5, 8, 50])
+def test_any_number_of_chunks_gives_the_same_index(
+    corpus_jsonl: Path, corpus_dir: Path, n_chunks: int
+) -> None:
+    for corpus in (corpus_jsonl, corpus_dir):
+        lab4 = build_index(iter_documents(corpus))
+        assert saved_bytes(chunked(corpus, n_chunks)) == saved_bytes(lab4)
+
+
+def test_limit(corpus_jsonl: Path) -> None:
+    for limit in (0, 1, 5, 100):
+        docs = list(iter_documents(corpus_jsonl))[:limit]
+        assert chunked(corpus_jsonl, 3, limit=limit) == build_index(docs)
+
+
+def test_chunks_cover_the_corpus_exactly_once(corpus_jsonl: Path) -> None:
+    chunks = plan_chunks(corpus_jsonl, 4)
+    assert [c.start for c in chunks[1:]] == [c.end for c in chunks[:-1]]  # contiguous
+    every = [d for c in chunks for d in read_chunk(c)]
+    assert every == list(iter_documents(corpus_jsonl))
+
+
+def test_partial_index_is_compact_and_picklable(corpus_jsonl: Path) -> None:
+    part = build_partial(plan_chunks(corpus_jsonl, 1)[0])
+    assert pickle.loads(pickle.dumps(part)) == part
+    assert part.num_docs == 8 and sum(part.df) == len(part.doc_ids) == len(part.tfs)
+    assert part.positions is not None and len(part.positions) == sum(part.tfs)
+
+
+def test_empty_corpus(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("")
+    assert chunked(empty, 4) == build_index([])
+
+
+# Random corpora: words that repeat (shared terms across chunks), Unicode, blank lines,
+# lines that aren't valid JSON, and documents without ids (their line number is used).
+LINES = st.one_of(
+    st.builds(
+        lambda words, with_id: json.dumps(
+            {"text": " ".join(words), **({"id": "x"} if with_id else {})}, ensure_ascii=False
+        ),
+        st.lists(st.sampled_from(["cat", "dog", "Київ", "café", "don't", "a"]), max_size=10),
+        st.booleans(),
+    ),
+    st.just(""),
+    st.just("not json"),
+)
+
+
+@pytest.mark.slow
+@given(st.lists(LINES, max_size=30), st.integers(1, 12), st.booleans())
+@settings(max_examples=60, deadline=None)
+def test_chunked_equals_serial_on_random_corpora(
+    lines: list[str], n_chunks: int, positions: bool
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "c.jsonl"
+        path.write_text("\n".join(lines), encoding="utf-8")
+        lab4 = build_index(iter_documents(path), positions=positions)
+        assert saved_bytes(chunked(path, n_chunks, positions)) == saved_bytes(lab4)
