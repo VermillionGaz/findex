@@ -36,3 +36,29 @@ jobs:
 
       - name: Tests, with coverage
         run: uv run pytest --cov=findex --cov-report=term-missing
+
+  free-threaded:
+    # Lab 5: the identity tests again, on Python 3.13t (no GIL), where the threads executor
+    # really runs build_partial in parallel. A race in the indexing code would show up here
+    # as an index that differs from the serial one. Only pytest is installed: findex's
+    # indexing path is standard library only, while typer (via pydantic-core) and hypothesis
+    # have no free-threaded builds yet -- so the CLI and property tests run in `check` only.
+    name: identity tests (Python 3.13t, no GIL)
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install free-threaded Python
+        run: uv python install 3.13t
+
+      - name: Serial, threaded and process builds give identical indexes
+        # -X gil=0 keeps the GIL off even if some import would silently re-enable it
+        run: >
+          uv run --isolated --no-project --python 3.13t --with pytest
+          python -X gil=0 -m pytest -p no:cacheprovider
+          tests/test_parallel.py tests/test_fixture_corpus.py tests/test_index.py tests/test_store.py
+          -k "not cli_pipeline"

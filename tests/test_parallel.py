@@ -3,14 +3,11 @@ serial pass (Lab 4's build_index), however the corpus is cut into chunks."""
 
 from __future__ import annotations
 
-import json
 import pickle
 import tempfile
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
 from findex.corpus import TxtChunk, iter_documents, plan_chunks, read_chunk
 from findex.index import Index, build_index
@@ -74,34 +71,6 @@ def test_empty_corpus(tmp_path: Path) -> None:
     assert chunked(empty, 4) == build_index([])
 
 
-# Random corpora: words that repeat (shared terms across chunks), Unicode, blank lines,
-# lines that aren't valid JSON, and documents without ids (their line number is used).
-LINES = st.one_of(
-    st.builds(
-        lambda words, with_id: json.dumps(
-            {"text": " ".join(words), **({"id": "x"} if with_id else {})}, ensure_ascii=False
-        ),
-        st.lists(st.sampled_from(["cat", "dog", "Київ", "café", "don't", "a"]), max_size=10),
-        st.booleans(),
-    ),
-    st.just(""),
-    st.just("not json"),
-)
-
-
-@pytest.mark.slow
-@given(st.lists(LINES, max_size=30), st.integers(1, 12), st.booleans())
-@settings(max_examples=60, deadline=None)
-def test_chunked_equals_serial_on_random_corpora(
-    lines: list[str], n_chunks: int, positions: bool
-) -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "c.jsonl"
-        path.write_text("\n".join(lines), encoding="utf-8")
-        lab4 = build_index(iter_documents(path), positions=positions)
-        assert saved_bytes(chunked(path, n_chunks, positions)) == saved_bytes(lab4)
-
-
 # --- M2: the executors ---------------------------------------------------------------------
 
 
@@ -149,3 +118,13 @@ def test_a_failure_cancels_the_chunks_still_waiting(corpus_dir: Path) -> None:
             failing_chunks(corpus_dir, good), "threads", 1, on_chunk_done=finished.append
         )
     assert len(finished) <= 1  # at most the chunk already running; the rest never started
+
+
+def test_corpus_bytes(corpus_jsonl: Path, corpus_dir: Path) -> None:
+    from findex.corpus import corpus_bytes
+
+    assert corpus_bytes(corpus_jsonl) == corpus_jsonl.stat().st_size
+    first_line = corpus_jsonl.read_bytes().split(b"\n")[0]
+    assert corpus_bytes(corpus_jsonl, limit=1) == len(first_line) + 1  # + its newline
+    assert corpus_bytes(corpus_dir) == sum(p.stat().st_size for p in corpus_dir.rglob("*.txt"))
+    assert corpus_bytes(corpus_dir, limit=0) == 0

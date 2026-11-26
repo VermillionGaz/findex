@@ -7,6 +7,7 @@ Run with --hypothesis-show-statistics to see how many examples each test tried.
 
 from __future__ import annotations
 
+import json
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -15,8 +16,9 @@ import pytest
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
-from findex.corpus import Document
+from findex.corpus import Document, iter_documents, plan_chunks
 from findex.index import Index, Posting, build_index
+from findex.parallel import build_partial, merge
 from findex.query import And, Not, Or, Phrase, Query, Term, parse
 from findex.rank import BM25, TfIdf, score_docs, top_k
 from findex.search import ENGINES, Engine
@@ -189,3 +191,41 @@ def test_bm25_is_increasing_with_diminishing_returns(
     s0, s1, s2 = (scorer(term, Posting(doc, n), index) for n in (tf - 1, tf, tf + 1))
     assert s0 < s1 < s2  # more occurrences always score higher...
     assert s2 - s1 < s1 - s0  # ...but each one adds less than the previous
+
+
+# --- 9. Lab 5: chunked indexing equals one serial pass, on random corpora ----------------------
+# Random corpora: words that repeat (shared terms across chunks), Unicode, blank lines,
+# lines that aren't valid JSON, and documents without ids (their line number is used).
+LINES = st.one_of(
+    st.builds(
+        lambda words, with_id: json.dumps(
+            {"text": " ".join(words), **({"id": "x"} if with_id else {})}, ensure_ascii=False
+        ),
+        st.lists(st.sampled_from(["cat", "dog", "Київ", "café", "don't", "a"]), max_size=10),
+        st.booleans(),
+    ),
+    st.just(""),
+    st.just("not json"),
+)
+
+
+@given(st.lists(LINES, max_size=30), st.integers(1, 12), st.booleans())
+@settings(max_examples=60, deadline=None)
+def test_chunked_equals_serial_on_random_corpora(
+    lines: list[str], n_chunks: int, positions: bool
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "c.jsonl"
+        path.write_text("\n".join(lines), encoding="utf-8")
+        lab4 = build_index(iter_documents(path), positions=positions)
+        assert saved_bytes(chunked(path, n_chunks, positions)) == saved_bytes(lab4)
+
+
+def saved_bytes(index: Index) -> bytes:
+    with tempfile.TemporaryDirectory() as tmp:
+        save(index, Path(tmp) / "i.bin")
+        return (Path(tmp) / "i.bin").read_bytes()
+
+
+def chunked(corpus: Path, n_chunks: int, positions: bool = True) -> Index:
+    return merge(build_partial(c, positions) for c in plan_chunks(corpus, n_chunks))

@@ -170,6 +170,14 @@ def _line_numbers_at(path: Path, offsets: list[int]) -> list[int]:
     return numbers
 
 
+def corpus_bytes(root: str | Path, limit: int | None = None) -> int:
+    """How many bytes of text a build would read (cheap: no parsing)."""
+    root = Path(root)
+    if root.is_file():
+        return root.stat().st_size if limit is None else _offset_after(root, limit)
+    return sum(p.stat().st_size for p in sorted(root.rglob("*.txt"))[:limit])
+
+
 # --- the whole corpus, as one stream -------------------------------------------------------
 def iter_documents(root: str | Path) -> Iterator[Document]:
     """Yield documents from a directory of .txt files or a .jsonl file."""

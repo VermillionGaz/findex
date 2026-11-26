@@ -34,7 +34,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-from .corpus import plan_chunks
+from .corpus import corpus_bytes, plan_chunks
 from .index import Index
 from .parallel import CHUNKS_PER_WORKER, build_partials, merge
 from .query import ParseError, parse
@@ -97,9 +97,16 @@ def _count_documents(corpus: Path, limit: int | None) -> int | None:
 
 
 class ExecutorChoice(StrEnum):
+    auto = "auto"
     serial = "serial"
     threads = "threads"
     processes = "processes"
+
+
+# Below this, starting worker processes costs more than it saves. A rough break-even from
+# the Lab 5 benchmark: serial indexing reads a few MB per second, while spawning a pool of
+# fresh interpreters costs about a second.
+PARALLEL_MIN_BYTES = 8 * 1024 * 1024
 
 
 @app.command("index")
@@ -111,8 +118,12 @@ def index_cmd(
     ] = True,
     limit: Annotated[int | None, typer.Option(help="Index only the first N documents.")] = None,
     executor: Annotated[
-        ExecutorChoice, typer.Option(help="Run the indexing in one thread, threads, or processes.")
-    ] = ExecutorChoice.serial,
+        ExecutorChoice,
+        typer.Option(
+            help="Index in one thread, in threads, or in processes. "
+            "auto: processes for corpora of 8 MB or more, serial below that."
+        ),
+    ] = ExecutorChoice.auto,
     workers: Annotated[
         int | None,
         typer.Option(min=1, help="Threads/processes to use (default: one per CPU core)."),
@@ -122,6 +133,10 @@ def index_cmd(
     if not corpus.exists():
         _fail(f"corpus not found: {corpus}")
     total = _count_documents(corpus, limit)
+    if executor is ExecutorChoice.auto:
+        size = corpus_bytes(corpus, limit)
+        executor = ExecutorChoice.processes if size >= PARALLEL_MIN_BYTES else ExecutorChoice.serial
+        log.info("auto: %.1f MB of text -> %s executor", size / 1e6, executor.value)
     n_workers = 1 if executor is ExecutorChoice.serial else (workers or os.cpu_count() or 1)
     n_chunks = 16 if executor is ExecutorChoice.serial else CHUNKS_PER_WORKER * n_workers
     columns = (

@@ -205,3 +205,21 @@ def test_index_executors_write_identical_files(
 
 def test_index_rejects_zero_workers(corpus_jsonl: Path, tmp_path: Path) -> None:
     assert run("index", corpus_jsonl, "-o", tmp_path / "x", "--workers", "0").exit_code == 2
+
+
+def test_auto_executor_uses_serial_for_a_small_corpus(corpus_jsonl: Path, tmp_path: Path) -> None:
+    result = run("-v", "index", corpus_jsonl, "-o", tmp_path / "x.bin")
+    assert result.exit_code == 0
+    assert "-> serial executor" in result.stderr
+
+
+@pytest.mark.slow
+def test_auto_executor_uses_processes_for_a_large_corpus(
+    corpus_jsonl: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import findex.cli
+
+    monkeypatch.setattr(findex.cli, "PARALLEL_MIN_BYTES", 0)  # every corpus counts as large
+    result = run("-v", "index", corpus_jsonl, "-o", tmp_path / "x.bin", "--workers", "2")
+    assert result.exit_code == 0, result.stderr
+    assert "-> processes executor" in result.stderr
