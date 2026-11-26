@@ -146,6 +146,7 @@ DEBUG findex.timing: Searcher.search took 0.4 ms
 
 (same matches as above)
 
+---
 **Coverage: 82%** (`uv run pytest --cov=findex`, branch coverage on). At 100%:
 `tokenize`, `corpus`, `query`, `rank`, `snippets`; `cli` 99%. Not covered, and why:
 
@@ -157,3 +158,22 @@ DEBUG findex.timing: Searcher.search took 0.4 ms
 - The big-endian byte swaps in `store.py`, marked `# pragma: no cover`: they only run on
   big-endian CPUs.
 - Abstract `raise NotImplementedError` methods, excluded in the coverage config.
+
+---
+Corpus: `data\simplewiki.jsonl`, 241,787 documents. Median of 3 runs per row.
+
+| Python | Executor | Workers | Wall (s, median) | CPU (s) | Peak RSS parent | Peak RSS workers | Merge (s) | Speedup |
+|---|---|---|---|---|---|---|---|---|
+| 3.13.18 | serial | 1 | 60.71 (60.6–66.7) | 61.9 | 4,697 MB | – | 20.87 | 1.00× |
+| 3.13.18 | threads | 1 | 61.60 (61.3–66.9) | 63.1 | 4,690 MB | – | 21.00 | 0.99× |
+| 3.13.18 | threads | 2 | 70.07 (69.5–71.6) | 72.0 | 4,717 MB | – | 22.52 | 0.87× |
+| 3.13.18 | threads | 4 | 74.39 (72.9–75.0) | 76.7 | 4,770 MB | – | 22.46 | 0.82× |
+| 3.13.18 | threads | 8 | 78.68 (77.9–79.8) | 81.3 | 4,813 MB | – | 24.17 | 0.77× |
+| 3.13.18 | threads | 12 | 80.42 (80.0–82.4) | 83.7 | 4,834 MB | – | 23.85 | 0.75× |
+| 3.13.18 | processes | 1 | 59.56 (59.5–67.0) | 61.2 | 4,658 MB | 522 MB | 19.16 | 1.02× |
+| 3.13.18 | processes | 2 | 41.32 (40.9–53.9) | 63.8 | 4,682 MB | 519 MB | 19.71 | 1.47× |
+| 3.13.18 | processes | 4 | 31.70 (31.6–31.9) | 66.4 | 4,709 MB | 520 MB | 20.30 | 1.92× |
+| 3.13.18 | processes | 8 | 29.20 (29.2–29.3) | 83.5 | 4,747 MB | 648 MB | 21.19 | 2.08× |
+| 3.13.18 | processes | 12 | 28.64 (28.4–28.7) | 98.1 | 4,773 MB | 774 MB | 21.52 | 2.12× |
+In the serial run, the parallelizable build phase is 66% of the time; plan and merge (34%) stay serial. Amdahl's law caps the speedup at 1 / 0.34 = **2.9×**, however many workers.
+![speedup.png](docs/speedup.png)

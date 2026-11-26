@@ -26,10 +26,10 @@ jobs:
         run: uv sync --locked
 
       - name: Lint (ruff check)
-        run: uv run ruff check src tests
+        run: uv run ruff check src tests benchmarks
 
       - name: Formatting (ruff format --check)
-        run: uv run ruff format --check src tests
+        run: uv run ruff format --check src tests benchmarks
 
       - name: Types (pyright strict)
         run: uv run pyright
