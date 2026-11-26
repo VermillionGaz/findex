@@ -104,3 +104,21 @@ def test_robots_txt_redirects_are_followed() -> None:
         return httpx.Response(200, text="User-agent: *\nDisallow: /\n")
 
     assert check_with(handler, "https://example.org/page") == [False]
+
+
+def test_crawl_delays_are_parsed_per_group_including_fractions() -> None:
+    from findex.crawler.robots import parse_crawl_delays
+
+    text = """
+    User-agent: *
+    Crawl-delay: 0.5          # a fraction: Python's robotparser would ignore this line
+
+    User-agent: findex
+    User-agent: otherbot
+    Disallow: /x
+    Crawl-delay: 3
+
+    User-agent: badbot
+    Crawl-delay: soon
+    """
+    assert parse_crawl_delays(text.splitlines()) == {"*": 0.5, "findex": 3.0, "otherbot": 3.0}

@@ -44,6 +44,7 @@ class FetchResult:
     attempts: int
     error: str | None  # why it failed, if it did
     truncated: bool = False  # the body was longer than max_bytes and was cut
+    charset: str | None = None  # from the Content-Type header, e.g. "utf-8"
 
     @property
     def ok(self) -> bool:
@@ -117,6 +118,7 @@ async def fetch(
                     attempts=attempt,
                     error=None if response.is_success or response.is_redirect else f"HTTP {status}",
                     truncated=truncated,
+                    charset=response.charset_encoding,
                 )
             error = f"HTTP {status}"
             retry_after = parse_retry_after(response.headers.get("retry-after"))

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
@@ -31,13 +31,47 @@ log = logging.getLogger("findex.crawler.robots")
 class _Rules:
     parser: RobotFileParser | None  # None: no rules to consult
     allow_all: bool  # used only when parser is None
+    delays: dict[str, float] = field(default_factory=dict[str, float])  # agent -> Crawl-delay
 
     def allowed(self, user_agent: str, url: str) -> bool:
         return self.parser.can_fetch(user_agent, url) if self.parser else self.allow_all
 
     def crawl_delay(self, user_agent: str) -> float | None:
-        delay = self.parser.crawl_delay(user_agent) if self.parser else None
-        return float(delay) if delay is not None else None  # an int at runtime, despite the stubs
+        # Same matching as robotparser: a group applies if its agent name appears in our
+        # product token ("findex" in "findex/0.4.0"); otherwise the "*" group.
+        token = user_agent.split("/")[0].lower()
+        for agent, delay in self.delays.items():
+            if agent != "*" and agent in token:
+                return delay
+        return self.delays.get("*")
+
+
+def parse_crawl_delays(lines: list[str]) -> dict[str, float]:
+    """Crawl-delay per user-agent group. Read here rather than by robotparser, which
+    ignores any value that isn't a whole number -- "Crawl-delay: 0.5" would be lost."""
+    delays: dict[str, float] = {}
+    agents: list[str] = []
+    in_rules = False  # a new User-agent line after rules starts a new group
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if ":" not in line:
+            continue
+        key, value = (part.strip() for part in line.split(":", 1))
+        key = key.lower()
+        if key == "user-agent":
+            if in_rules:
+                agents, in_rules = [], False
+            agents.append(value.lower())
+        else:
+            in_rules = True
+            if key == "crawl-delay":
+                try:
+                    delay = float(value)
+                except ValueError:
+                    continue
+                for agent in agents:
+                    delays.setdefault(agent, delay)
+    return delays
 
 
 class RobotsCache:
@@ -82,12 +116,13 @@ class RobotsCache:
             sleep=self._sleep,
         )
         if result.ok:
+            lines = result.content.decode("utf-8", errors="replace").splitlines()
             parser = RobotFileParser()
             # parse(), never read(): read() downloads with blocking urllib and would
             # freeze the event loop.
-            parser.parse(result.content.decode("utf-8", errors="replace").splitlines())
+            parser.parse(lines)
             log.info("%s/robots.txt: %d bytes of rules", origin, len(result.content))
-            return _Rules(parser, allow_all=False)
+            return _Rules(parser, allow_all=False, delays=parse_crawl_delays(lines))
         if result.status in (401, 403):
             log.warning(
                 "%s/robots.txt: HTTP %d, treating the site as off-limits", origin, result.status
