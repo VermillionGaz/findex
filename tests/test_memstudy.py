@@ -75,9 +75,9 @@ def test_every_variant_survives_a_pickle_roundtrip(name):
 @pytest.mark.parametrize("name", VARIANTS)
 def test_measure_reports_sane_numbers_and_cleans_up(name, tmp_path):
     r = measure(name, docs(), tmp_path)
-    assert r["n_postings"] == count_postings(r["postings"]) == 6
-    assert r["n_terms"] == 3
-    assert r["peak"] >= r["retained"] > 0
-    assert r["size"] > 0 and r["load_s"] >= 0
-    assert as_pairs(r["postings"]) == EXPECTED
+    assert r.n_postings == count_postings(r.postings) == 6
+    assert r.n_terms == 3
+    assert r.peak >= r.retained > 0
+    assert r.size > 0 and r.load_s >= 0
+    assert as_pairs(r.postings) == EXPECTED
     assert list(tmp_path.iterdir()) == [], "temporary pickle was not deleted"

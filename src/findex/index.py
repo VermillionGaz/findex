@@ -1,8 +1,9 @@
 """In-memory inverted index, built in a single streaming pass.
 
-    python -m findex.index data/simplewiki.jsonl [--limit N] [--term cat]
-    python -m findex.index data/simplewiki.jsonl --out index.bin [--format binary|pickle]
+python -m findex.index data/simplewiki.jsonl [--limit N] [--term cat]
+python -m findex.index data/simplewiki.jsonl --out index.bin [--format binary|pickle]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,7 +24,7 @@ from .tokenize import tokenize
 @dataclass(frozen=True, slots=True)
 class Posting:
     doc_id: int  # internal sequential id: 0, 1, 2, ...
-    tf: int      # how many times the term occurs in that document
+    tf: int  # how many times the term occurs in that document
     # Token offsets of each occurrence, ascending (len == tf). Empty if the index
     # was built without positions. Needed for phrase queries and snippets.
     positions: tuple[int, ...] = ()
@@ -58,13 +59,13 @@ class Index(Mapping[str, list[Posting]]):
         doc_lengths: dict[int, int],
         doc_meta: dict[int, DocMeta],
     ) -> None:
-        self.postings = postings          # term -> postings, sorted by doc_id
-        self.doc_lengths = doc_lengths    # doc_id -> number of tokens
-        self.doc_meta = doc_meta          # doc_id -> info for display
+        self.postings = postings  # term -> postings, sorted by doc_id
+        self.doc_lengths = doc_lengths  # doc_id -> number of tokens
+        self.doc_meta = doc_meta  # doc_id -> info for display
 
     # --- the three methods Mapping requires; it derives the rest from these ----------
     def __getitem__(self, term: str) -> list[Posting]:
-        return self.postings[term]        # KeyError for unknown terms, like a dict
+        return self.postings[term]  # KeyError for unknown terms, like a dict
 
     def __len__(self) -> int:
         return len(self.postings)
@@ -84,14 +85,18 @@ class Index(Mapping[str, list[Posting]]):
         if not isinstance(other, Index):
             return NotImplemented
         return (self.postings, self.doc_lengths, self.doc_meta) == (
-            other.postings, other.doc_lengths, other.doc_meta
+            other.postings,
+            other.doc_lengths,
+            other.doc_meta,
         )
 
     __hash__ = None  # mutable contents + custom __eq__ => unhashable, like dict
 
     def __repr__(self) -> str:
-        return (f"{type(self).__name__}(terms={len(self):,}, docs={self.num_docs:,}, "
-                f"avg_doc_length={self.avg_doc_length:.1f})")
+        return (
+            f"{type(self).__name__}(terms={len(self):,}, docs={self.num_docs:,}, "
+            f"avg_doc_length={self.avg_doc_length:.1f})"
+        )
 
     # --- statistics ranking needs ----------------------------------------------------------
     @property
@@ -160,16 +165,20 @@ def main() -> None:
     ap.add_argument("--term", default=None, help="print the postings for this term")
     ap.add_argument("--out", type=Path, default=None, help="save the index to this file")
     ap.add_argument("--format", choices=("binary", "pickle"), default="binary")
-    ap.add_argument("--no-positions", action="store_true",
-                    help="don't record token positions (smaller, but no phrase queries)")
+    ap.add_argument(
+        "--no-positions",
+        action="store_true",
+        help="don't record token positions (smaller, but no phrase queries)",
+    )
     ap.add_argument("-v", "--verbose", action="store_true", help="show the timing log")
     args = ap.parse_args()
     setup_logging(args.verbose)
 
     tracemalloc.start()
     t0 = time.perf_counter()
-    index = build_index(islice(iter_documents(args.root), args.limit),
-                        positions=not args.no_positions)
+    index = build_index(
+        islice(iter_documents(args.root), args.limit), positions=not args.no_positions
+    )
     elapsed = time.perf_counter() - t0
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -185,14 +194,18 @@ def main() -> None:
 
         t0 = time.perf_counter()
         save(index, args.out, args.format)
-        print(f"saved:        {args.out} ({args.format}, "
-              f"{args.out.stat().st_size / 1e6:.1f} MB, {time.perf_counter() - t0:.2f}s)")
+        print(
+            f"saved:        {args.out} ({args.format}, "
+            f"{args.out.stat().st_size / 1e6:.1f} MB, {time.perf_counter() - t0:.2f}s)"
+        )
     if args.term:
         plist = index.get(args.term, [])
         print(f"'{args.term}': in {len(plist)} documents; first 5:")
         for p in plist[:5]:
-            print(f"  doc {p.doc_id} ({index.doc_meta[p.doc_id].title!r}) tf={p.tf} "
-                  f"positions={p.positions[:10]}")
+            print(
+                f"  doc {p.doc_id} ({index.doc_meta[p.doc_id].title!r}) tf={p.tf} "
+                f"positions={p.positions[:10]}"
+            )
 
 
 if __name__ == "__main__":

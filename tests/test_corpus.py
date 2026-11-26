@@ -24,10 +24,12 @@ def test_jsonl_skips_bad_lines(tmp_path):
     p = tmp_path / "docs.jsonl"
     p.write_text(
         json.dumps({"id": "x1", "text": "first"}) + "\n"
-        "\n"                                      # blank line
-        "{not json}\n"                            # malformed JSON
-        + json.dumps({"id": "x2"}) + "\n"         # missing 'text'
-        + json.dumps({"text": "no id"}) + "\n",   # id falls back to line number (5)
+        "\n"  # blank line
+        "{not json}\n"  # malformed JSON
+        + json.dumps({"id": "x2"})
+        + "\n"  # missing 'text'
+        + json.dumps({"text": "no id"})
+        + "\n",  # id falls back to line number (5)
         encoding="utf-8",
     )
     docs = list(iter_documents(p))
@@ -46,7 +48,7 @@ def test_bad_encoding_is_skipped_and_logged(tmp_path, caplog):
 def test_missing_path_error_surfaces_late(tmp_path):
     gen = iter_documents(tmp_path / "does-not-exist")
     assert isinstance(gen, types.GeneratorType)  # calling it did NOT raise...
-    with pytest.raises(FileNotFoundError):       # ...the error appears on first next()
+    with pytest.raises(FileNotFoundError):  # ...the error appears on first next()
         next(gen)
 
 

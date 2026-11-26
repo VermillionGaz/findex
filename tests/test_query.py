@@ -20,36 +20,41 @@ def test_operators_build_nodes():
 
 def test_nodes_are_hashable_values():
     assert len({T("a") & T("b"), T("a") & T("b"), T("a") | T("b")}) == 2
-    assert T("a") & T("b") != T("b") & T("a")          # order matters in the tree
+    assert T("a") & T("b") != T("b") & T("a")  # order matters in the tree
 
 
 # --- tree equality: parse(string) == tree built in code ---------------------------------
-@pytest.mark.parametrize("query, tree", [
-    ("cat", T("cat")),
-    ("Cats", T("cats")),                                  # normalized like the corpus
-    ("cat dog", T("cat") & T("dog")),                     # implicit AND
-    ("cat AND dog", T("cat") & T("dog")),
-    ("cat OR dog", T("cat") | T("dog")),
-    ("NOT cat", ~T("cat")),
-    ("NOT NOT cat", ~~T("cat")),
-    ("cat NOT dog", T("cat") & ~T("dog")),
-    ("a OR b c", T("a") | (T("b") & T("c"))),             # AND binds tighter than OR
-    ("a b OR c", (T("a") & T("b")) | T("c")),
-    ("(a OR b) c", (T("a") | T("b")) & T("c")),           # parentheses override
-    ("NOT a b", ~T("a") & T("b")),                        # NOT binds tightest
-    ("NOT (a b)", ~(T("a") & T("b"))),
-    ("a OR b OR c", (T("a") | T("b")) | T("c")),          # left-associative
-    ("a b c", (T("a") & T("b")) & T("c")),
-    ("((a))", T("a")),
-    ('"event loop"', Phrase(("event", "loop"))),
-    ('"Event  Loop"', Phrase(("event", "loop"))),
-    ('"python"', T("python")),                            # one-word phrase is a term
-    ("U.S.", Phrase(("u", "s"))),                         # split word: must be adjacent
-    ("e-mail", T("e-mail")),                              # your tokenizer keeps hyphens
-    ("cats & dogs", T("cats") & T("dogs")),               # punctuation-only word dropped
-    ('python AND (async OR await) NOT java "event loop"',
-     T("python") & (T("async") | T("await")) & ~T("java") & Phrase(("event", "loop"))),
-])
+@pytest.mark.parametrize(
+    "query, tree",
+    [
+        ("cat", T("cat")),
+        ("Cats", T("cats")),  # normalized like the corpus
+        ("cat dog", T("cat") & T("dog")),  # implicit AND
+        ("cat AND dog", T("cat") & T("dog")),
+        ("cat OR dog", T("cat") | T("dog")),
+        ("NOT cat", ~T("cat")),
+        ("NOT NOT cat", ~~T("cat")),
+        ("cat NOT dog", T("cat") & ~T("dog")),
+        ("a OR b c", T("a") | (T("b") & T("c"))),  # AND binds tighter than OR
+        ("a b OR c", (T("a") & T("b")) | T("c")),
+        ("(a OR b) c", (T("a") | T("b")) & T("c")),  # parentheses override
+        ("NOT a b", ~T("a") & T("b")),  # NOT binds tightest
+        ("NOT (a b)", ~(T("a") & T("b"))),
+        ("a OR b OR c", (T("a") | T("b")) | T("c")),  # left-associative
+        ("a b c", (T("a") & T("b")) & T("c")),
+        ("((a))", T("a")),
+        ('"event loop"', Phrase(("event", "loop"))),
+        ('"Event  Loop"', Phrase(("event", "loop"))),
+        ('"python"', T("python")),  # one-word phrase is a term
+        ("U.S.", Phrase(("u", "s"))),  # split word: must be adjacent
+        ("e-mail", T("e-mail")),  # your tokenizer keeps hyphens
+        ("cats & dogs", T("cats") & T("dogs")),  # punctuation-only word dropped
+        (
+            'python AND (async OR await) NOT java "event loop"',
+            T("python") & (T("async") | T("await")) & ~T("java") & Phrase(("event", "loop")),
+        ),
+    ],
+)
 def test_parse_builds_the_expected_tree(query, tree):
     assert parse(query) == tree
 
@@ -58,16 +63,19 @@ def test_operators_must_be_uppercase():
     assert parse("cat and dog") == T("cat") & T("and") & T("dog")
 
 
-@pytest.mark.parametrize("bad, where", [
-    ("", "empty"),
-    ("cat AND", "end of the query"),
-    ("OR cat", "position 0"),
-    ("cat AND OR dog", "position 8"),
-    ("(cat dog", "expected ')'"),
-    ("cat dog)", "position 7"),
-    ('"unclosed', "unclosed quote at position 0"),
-    ("()", "position 1"),
-])
+@pytest.mark.parametrize(
+    "bad, where",
+    [
+        ("", "empty"),
+        ("cat AND", "end of the query"),
+        ("OR cat", "position 0"),
+        ("cat AND OR dog", "position 8"),
+        ("(cat dog", "expected ')'"),
+        ("cat dog)", "position 7"),
+        ('"unclosed', "unclosed quote at position 0"),
+        ("()", "position 1"),
+    ],
+)
 def test_parse_errors_say_where(bad, where):
     with pytest.raises(ParseError, match=where.replace("(", r"\(").replace(")", r"\)")):
         parse(bad)
@@ -93,12 +101,12 @@ def test_iter_nodes_walks_the_whole_tree():
 
 # --- evaluation --------------------------------------------------------------------------
 TEXTS = [
-    "the event loop runs async tasks",       # 0
-    "an event in the loop",                  # 1  event, loop -- but not adjacent
-    "python async await",                    # 2
-    "java event loop",                       # 3
-    "loop event",                            # 4  wrong order
-    "python event loop event loop",          # 5
+    "the event loop runs async tasks",  # 0
+    "an event in the loop",  # 1  event, loop -- but not adjacent
+    "python async await",  # 2
+    "java event loop",  # 3
+    "loop event",  # 4  wrong order
+    "python event loop event loop",  # 5
 ]
 
 
@@ -114,7 +122,7 @@ def ops(request):
 
 def test_phrase_needs_adjacent_words_in_order(idx, ops):
     assert parse('"event loop"').evaluate(idx, ops) == [0, 3, 5]
-    assert parse("event loop").evaluate(idx, ops) == [0, 1, 3, 4, 5]   # no quotes: anywhere
+    assert parse("event loop").evaluate(idx, ops) == [0, 1, 3, 4, 5]  # no quotes: anywhere
     assert parse('"loop event"').evaluate(idx, ops) == [4, 5]
 
 
@@ -129,7 +137,7 @@ def test_phrase_with_unknown_word(idx, ops):
 
 def test_the_lab_example(idx, ops):
     q = 'python AND (async OR await) NOT java "event loop"'
-    assert parse(q).evaluate(idx, ops) == []          # doc 2 has no phrase, doc 5 no async
+    assert parse(q).evaluate(idx, ops) == []  # doc 2 has no phrase, doc 5 no async
     assert parse('(python OR java) "event loop" NOT java').evaluate(idx, ops) == [5]
 
 
@@ -149,8 +157,11 @@ def brute_force(node, docs: list[list[str]]) -> set[int]:
         return {i for i, d in enumerate(docs) if node.text in d}
     if isinstance(node, Phrase):
         n = len(node.terms)
-        return {i for i, d in enumerate(docs)
-                if any(tuple(d[j:j + n]) == node.terms for j in range(len(d)))}
+        return {
+            i
+            for i, d in enumerate(docs)
+            if any(tuple(d[j : j + n]) == node.terms for j in range(len(d)))
+        }
     if isinstance(node, And):
         return brute_force(node.left, docs) & brute_force(node.right, docs)
     if isinstance(node, Or):

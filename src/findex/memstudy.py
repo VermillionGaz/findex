@@ -14,6 +14,7 @@ file/load columns compare *representations*, not file formats.
 
 Prints a Markdown table to paste into the README.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,7 +27,7 @@ import tracemalloc
 from array import array
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import islice
 from pathlib import Path
 
@@ -57,16 +58,27 @@ def _term_counts(docs: Iterable[Document]) -> Iterator[tuple[int, Counter[str]]]
         yield doc_id, Counter(tokenize(doc.text))
 
 
-def build_objects(docs: Iterable[Document], cls: type) -> dict[str, list]:
-    postings: dict[str, list] = {}
+# The three shapes the postings can take (PEP 695 `type` aliases).
+type ObjectPostings = dict[str, list[PlainPosting]] | dict[str, list[SlotPosting]]
+type ArrayPostings = dict[str, tuple[array[int], array[int]]]
+type AnyPostings = ObjectPostings | ArrayPostings
+
+
+def build_objects[P: (PlainPosting, SlotPosting)](
+    docs: Iterable[Document], cls: type[P]
+) -> dict[str, list[P]]:
+    """Generic over the posting class (PEP 695): pass SlotPosting and the type checker
+    knows the result is dict[str, list[SlotPosting]]. `P: (A, B)` constrains P to
+    exactly one of those two classes."""
+    postings: dict[str, list[P]] = {}
     for doc_id, counts in _term_counts(docs):
         for term, tf in counts.items():
             postings.setdefault(term, []).append(cls(doc_id, tf))
     return postings
 
 
-def build_arrays(docs: Iterable[Document]) -> dict[str, tuple[array, array]]:
-    postings: dict[str, tuple[array, array]] = {}
+def build_arrays(docs: Iterable[Document]) -> ArrayPostings:
+    postings: ArrayPostings = {}
     for doc_id, counts in _term_counts(docs):
         for term, tf in counts.items():
             pair = postings.get(term)
@@ -77,27 +89,53 @@ def build_arrays(docs: Iterable[Document]) -> dict[str, tuple[array, array]]:
     return postings
 
 
-VARIANTS: dict[str, tuple[str, Callable[[Iterable[Document]], dict]]] = {
-    "plain": ("`list[Posting]` with plain `@dataclass`", lambda d: build_objects(d, PlainPosting)),
-    "slots": ("`list[Posting]` with `slots=True`", lambda d: build_objects(d, SlotPosting)),
+def _build_plain(docs: Iterable[Document]) -> AnyPostings:
+    return build_objects(docs, PlainPosting)
+
+
+def _build_slots(docs: Iterable[Document]) -> AnyPostings:
+    return build_objects(docs, SlotPosting)
+
+
+VARIANTS: dict[str, tuple[str, Callable[[Iterable[Document]], AnyPostings]]] = {
+    "plain": ("`list[Posting]` with plain `@dataclass`", _build_plain),
+    "slots": ("`list[Posting]` with `slots=True`", _build_slots),
     "arrays": ("`array('I')` pairs (doc_ids, tfs) — no objects", build_arrays),
 }
 
 
-def as_pairs(postings: dict) -> dict[str, list[tuple[int, int]]]:
+def as_pairs(postings: AnyPostings) -> dict[str, list[tuple[int, int]]]:
     """Normalize any variant to term -> [(doc_id, tf)] so variants can be compared."""
-    out = {}
+    out: dict[str, list[tuple[int, int]]] = {}
     for term, v in postings.items():
-        out[term] = list(zip(*v)) if isinstance(v, tuple) else [(p.doc_id, p.tf) for p in v]
+        if isinstance(v, tuple):
+            out[term] = list(zip(v[0], v[1], strict=True))
+        else:
+            out[term] = [(p.doc_id, p.tf) for p in v]
     return out
 
 
-def count_postings(postings: dict) -> int:
+def count_postings(postings: AnyPostings) -> int:
     return sum(len(v[0]) if isinstance(v, tuple) else len(v) for v in postings.values())
 
 
+@dataclass(slots=True)
+class Measurement:
+    """One variant's results. A dataclass instead of a dict: every field has its own
+    type, so the type checker knows `m.peak` is an int and `m.postings` a mapping."""
+
+    name: str
+    n_postings: int
+    n_terms: int
+    peak: int  # bytes
+    retained: int  # bytes
+    size: int  # bytes
+    load_s: float
+    postings: AnyPostings | None = field(default=None, repr=False)
+
+
 # --- measurement --------------------------------------------------------------------------
-def measure(name: str, docs: Iterable[Document], out_dir: Path) -> dict:
+def measure(name: str, docs: Iterable[Document], out_dir: Path) -> Measurement:
     _, build = VARIANTS[name]
     gc.collect()
 
@@ -119,16 +157,16 @@ def measure(name: str, docs: Iterable[Document], out_dir: Path) -> dict:
     load_s = time.perf_counter() - t0
     path.unlink()
 
-    return {
-        "name": name,
-        "postings": postings,
-        "n_postings": count_postings(postings),
-        "n_terms": len(postings),
-        "peak": peak,
-        "retained": retained,
-        "size": size,
-        "load_s": load_s,
-    }
+    return Measurement(
+        name=name,
+        n_postings=count_postings(postings),
+        n_terms=len(postings),
+        peak=peak,
+        retained=retained,
+        size=size,
+        load_s=load_s,
+        postings=postings,
+    )
 
 
 def _real_bytes_each(make: Callable[[int], object], n: int = 100_000) -> float:
@@ -170,35 +208,47 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="findex.memstudy")
     ap.add_argument("root", type=Path, help="corpus: a .jsonl file or a folder of .txt files")
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--out-dir", type=Path, default=None,
-                    help="where to write the temporary pickles (default: a temp dir)")
+    ap.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="where to write the temporary pickles (default: a temp dir)",
+    )
     args = ap.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = args.out_dir or Path(tmp)
-        results = []
+        results: list[Measurement] = []
         for name in VARIANTS:
             # A fresh stream per variant: generators can only be consumed once.
             results.append(measure(name, islice(iter_documents(args.root), args.limit), out_dir))
             print(f"  {name}: done", file=sys.stderr)
 
     # Sanity check: all three representations must hold exactly the same postings.
-    reference = as_pairs(results[0]["postings"])
+    first = results[0]
+    assert first.postings is not None
+    reference = as_pairs(first.postings)
     for r in results[1:]:
-        assert as_pairs(r["postings"]) == reference, f"{r['name']} differs from plain"
+        assert r.postings is not None and as_pairs(r.postings) == reference, f"{r.name} differs"
     for r in results:
-        del r["postings"]
+        r.postings = None  # free the memory before printing
 
-    n = results[0]["n_postings"]
-    print(f"\nCorpus: {args.root} (limit={args.limit}), "
-          f"{results[0]['n_terms']:,} terms, {n:,} postings, CPython {sys.version.split()[0]}\n")
-    print("| Postings representation | Peak memory (build) | Retained after build "
-          "| Bytes / posting | Index file size | Load time |")
+    n = first.n_postings
+    print(
+        f"\nCorpus: {args.root} (limit={args.limit}), "
+        f"{first.n_terms:,} terms, {n:,} postings, CPython {sys.version.split()[0]}\n"
+    )
+    print(
+        "| Postings representation | Peak memory (build) | Retained after build "
+        "| Bytes / posting | Index file size | Load time |"
+    )
     print("|---|---|---|---|---|---|")
     for r in results:
-        print(f"| {VARIANTS[r['name']][0]} | {r['peak'] / 1e6:.1f} MB "
-              f"| {r['retained'] / 1e6:.1f} MB | {r['retained'] / n:.1f} "
-              f"| {r['size'] / 1e6:.1f} MB | {r['load_s']:.3f} s |")
+        print(
+            f"| {VARIANTS[r.name][0]} | {r.peak / 1e6:.1f} MB "
+            f"| {r.retained / 1e6:.1f} MB | {r.retained / n:.1f} "
+            f"| {r.size / 1e6:.1f} MB | {r.load_s:.3f} s |"
+        )
     print("\nPer-posting costs:")
     print(per_object_sizes())
 

@@ -9,6 +9,7 @@ answers up per document and keeps the top k.
     N        how many documents there are                   (index.num_docs)
     idf      how rare -- and so how informative -- a term is: log(N / df)
 """
+
 from __future__ import annotations
 
 import heapq
@@ -16,7 +17,7 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from operator import itemgetter
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from .index import Index, Posting
 
@@ -80,7 +81,10 @@ class BM25:
         return idf * tf * (self.k1 + 1) / (tf + self.k1 * (1 - self.b + self.b * length_ratio))
 
 
-SCORERS: dict[str, Scorer] = {"bm25": BM25(), "tfidf": TfIdf()}
+type ScorerName = Literal["bm25", "tfidf"]
+
+DEFAULT_SCORER = BM25()
+SCORERS: dict[ScorerName, Scorer] = {"bm25": DEFAULT_SCORER, "tfidf": TfIdf()}
 
 
 # --- results --------------------------------------------------------------------------------
@@ -115,7 +119,9 @@ def score_docs(
     for term in terms:
         for posting in index.get(term, []):
             if candidates is None or posting.doc_id in candidates:
-                scores[posting.doc_id] = scores.get(posting.doc_id, 0.0) + scorer(term, posting, index)
+                scores[posting.doc_id] = scores.get(posting.doc_id, 0.0) + scorer(
+                    term, posting, index
+                )
     return scores
 
 
@@ -131,7 +137,7 @@ def top_k(scores: dict[int, float], k: int) -> list[tuple[int, float]]:
 def rank(
     index: Index,
     terms: Iterable[str],
-    scorer: Scorer = BM25(),
+    scorer: Scorer = DEFAULT_SCORER,
     k: int = 10,
     candidates: set[int] | None = None,
 ) -> list[SearchResult]:

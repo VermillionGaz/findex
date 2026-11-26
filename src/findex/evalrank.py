@@ -12,6 +12,7 @@ Step 2 -- report (prints the Markdown table for the README):
 precision@5 = (relevant documents among the top 5) / 5. Judgments are stored
 by article title, so they survive rebuilding the index.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,7 +29,7 @@ from .store import load
 
 K = 5
 SCORERS: dict[str, Scorer] = {"TF-IDF": TfIdf(), "BM25": BM25()}
-Judgments = dict[str, dict[str, bool]]          # query -> {title: relevant?}
+Judgments = dict[str, dict[str, bool]]  # query -> {title: relevant?}
 
 
 def read_queries(path: Path) -> list[str]:
@@ -43,9 +44,9 @@ def read_judgments(path: Path) -> Judgments:
 
 def write_judgments(path: Path, judgments: Judgments) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")               # write, then rename: a crash mid-write
+    tmp = path.with_suffix(".tmp")  # write, then rename: a crash mid-write
     tmp.write_text(json.dumps(judgments, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)                             # can't leave a half-written file
+    tmp.replace(path)  # can't leave a half-written file
 
 
 def top_titles(searcher: Searcher, query: str, scorer: Scorer, k: int = K) -> list[str]:
@@ -54,7 +55,7 @@ def top_titles(searcher: Searcher, query: str, scorer: Scorer, k: int = K) -> li
 
 def pool(searcher: Searcher, query: str) -> list[int]:
     """Doc ids in either scorer's top k, in order of first appearance."""
-    seen: dict[int, None] = {}                    # a dict keeps insertion order, unlike a set
+    seen: dict[int, None] = {}  # a dict keeps insertion order, unlike a set
     for scorer in SCORERS.values():
         for r in searcher.search(query, scorer, K):
             seen.setdefault(r.doc_id)
@@ -84,8 +85,9 @@ def label(
         todo = [d for d in pool(searcher, query) if index.doc_meta[d].title not in judged]
         if not todo:
             continue
-        print(f"\n=== query {qi}/{len(queries)}: {query}   "
-              f"({searcher.last_total} matching documents)")
+        print(
+            f"\n=== query {qi}/{len(queries)}: {query}   ({searcher.last_total} matching documents)"
+        )
         texts = fetch_texts(index, todo)
         terms = parse(query).positive_terms()
         for d in todo:
@@ -93,8 +95,11 @@ def label(
             print(f"\n  {title}")
             if d in texts:
                 print(f"    {make_snippet(texts[d], terms, radius=120)}")
-            while (answer := ask("  should this be in the top 5? [y/n, q = save & quit] ")
-                   .strip().lower()) not in ("y", "n", "q"):
+            while (
+                answer := ask("  should this be in the top 5? [y/n, q = save & quit] ")
+                .strip()
+                .lower()
+            ) not in ("y", "n", "q"):
                 pass
             if answer == "q":
                 write_judgments(path, judgments)
@@ -117,7 +122,7 @@ def report(index: Index, queries: list[str], judgments: Judgments) -> str:
     unjudged_total = 0
     for qi, query in enumerate(queries, 1):
         judged = judgments.get(query, {})
-        cells = []
+        cells: list[str] = []
         for name, scorer in SCORERS.items():
             p, unjudged = precision_at_k(top_titles(searcher, query, scorer), judged)
             totals[name] += p
@@ -127,8 +132,10 @@ def report(index: Index, queries: list[str], judgments: Judgments) -> str:
     means = " | ".join(f"**{totals[n] / max(len(queries), 1):.2f}**" for n in names)
     lines.append(f"| | **mean** | | {means} |")
     if unjudged_total:
-        lines.append(f"\n{unjudged_total} top-{K} results are unjudged (counted as not relevant): "
-                     f"run `label` again to judge them.")
+        lines.append(
+            f"\n{unjudged_total} top-{K} results are unjudged (counted as not relevant): "
+            f"run `label` again to judge them."
+        )
     return "\n".join(lines)
 
 

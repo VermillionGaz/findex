@@ -14,17 +14,20 @@ Each grammar rule is one method of the parser, and each calls the rules below
 it -- "recursive descent". Lower-precedence rules sit higher up, so they end up
 nearer the root of the tree and are applied last.
 """
+
 from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from .index import Index
 from .tokenize import tokenize
 
-DocIds = list[int]                                   # sorted ascending, no duplicates
-Ops = Mapping[str, Callable[[DocIds, DocIds], DocIds]]  # "AND"/"OR"/"NOT" -> merge function
+DocIds = list[int]  # sorted ascending, no duplicates
+type OpName = Literal["AND", "OR", "NOT"]
+type Ops = Mapping[OpName, Callable[[DocIds, DocIds], DocIds]]  # operator -> merge function
 
 
 class ParseError(ValueError):
@@ -66,9 +69,10 @@ class Query:
 # comparing fields. Two separately built trees with the same shape are ==, which
 # is exactly what "tree-equality tests" need.
 
+
 @dataclass(frozen=True, slots=True)
 class Term(Query):
-    text: str                                         # one normalized token
+    text: str  # one normalized token
 
     def evaluate(self, index: Index, ops: Ops) -> DocIds:
         return [p.doc_id for p in index.get(self.text, [])]
@@ -82,12 +86,13 @@ class Term(Query):
 
 @dataclass(frozen=True, slots=True)
 class Phrase(Query):
-    terms: tuple[str, ...]                            # normalized tokens, in order
+    terms: tuple[str, ...]  # normalized tokens, in order
 
     def evaluate(self, index: Index, ops: Ops) -> DocIds:
         if not index.has_positions:
-            raise ValueError("phrase queries need positions: rebuild the index "
-                             "without --no-positions")
+            raise ValueError(
+                "phrase queries need positions: rebuild the index without --no-positions"
+            )
         # 1. Documents containing ALL the words (cheap: postings merge).
         plists = [index.get(t, []) for t in self.terms]
         docs = [p.doc_id for p in plists[0]]
@@ -165,7 +170,7 @@ class Not(Query):
         return ops["NOT"](list(range(index.num_docs)), self.child.evaluate(index, ops))
 
     def positive_terms(self) -> list[str]:
-        return []                                     # what you exclude doesn't score
+        return []  # what you exclude doesn't score
 
     def __str__(self) -> str:
         return f"NOT {self.child}"
@@ -176,9 +181,9 @@ class Not(Query):
 # =============================================================================================
 @dataclass(frozen=True, slots=True)
 class Token:
-    kind: str           # "WORD", "PHRASE", "AND", "OR", "NOT", "(", ")"
+    kind: str  # "WORD", "PHRASE", "AND", "OR", "NOT", "(", ")"
     text: str
-    pos: int            # character offset in the query, for error messages
+    pos: int  # character offset in the query, for error messages
 
 
 _LEX = re.compile(r'\s*(?:(?P<phrase>"[^"]*"?)|(?P<paren>[()])|(?P<word>[^\s()"]+))')
@@ -189,14 +194,14 @@ def lex(query: str) -> list[Token]:
     pos = 0
     while pos < len(query):
         m = _LEX.match(query, pos)
-        if m is None or m.end() == pos:          # only trailing whitespace left
+        if m is None or m.lastgroup is None:  # only trailing whitespace left
             break
         start, pos = m.start(m.lastgroup), m.end()
         if m.lastgroup == "phrase":
             text = m.group("phrase")
             if len(text) < 2 or not text.endswith('"'):
                 raise ParseError(f"unclosed quote at position {start}")
-            if _words(text[1:-1]) is not None:     # drop empty phrases like ""
+            if _words(text[1:-1]) is not None:  # drop empty phrases like ""
                 tokens.append(Token("PHRASE", text[1:-1], start))
         elif m.lastgroup == "paren":
             tokens.append(Token(m.group("paren"), m.group("paren"), start))
@@ -204,8 +209,8 @@ def lex(query: str) -> list[Token]:
             word = m.group("word")
             if word in ("AND", "OR", "NOT"):
                 tokens.append(Token(word, word, start))
-            elif _words(word) is not None:       # "cats & dogs": the "&" is dropped,
-                tokens.append(Token("WORD", word, start))   # like Lab 2 did
+            elif _words(word) is not None:  # "cats & dogs": the "&" is dropped,
+                tokens.append(Token("WORD", word, start))  # like Lab 2 did
     return tokens
 
 
@@ -241,7 +246,7 @@ class _Parser:
         if not self.tokens:
             raise ParseError(f"empty query (no searchable words): {self.query!r}")
         tree = self.or_expr()
-        if self.peek() is not None:          # e.g. a stray ")"
+        if self.peek() is not None:  # e.g. a stray ")"
             raise self.error("unexpected token")
         return tree
 
@@ -249,7 +254,7 @@ class _Parser:
         node = self.and_expr()
         while (tok := self.peek()) is not None and tok.kind == "OR":
             self.take()
-            node = node | self.and_expr()    # left-associative: ((a | b) | c)
+            node = node | self.and_expr()  # left-associative: ((a | b) | c)
         return node
 
     def and_expr(self) -> Query:
@@ -283,7 +288,7 @@ class _Parser:
         if tok.kind in ("WORD", "PHRASE"):
             self.take()
             node = _words(tok.text)
-            assert node is not None              # the lexer only keeps words with tokens
+            assert node is not None  # the lexer only keeps words with tokens
             return node
         raise self.error("expected a term")
 
@@ -308,5 +313,7 @@ def parse(query: str) -> Query:
 def iter_nodes(node: Query) -> Iterator[Query]:
     """Every node of the tree, depth-first (handy for tests and debugging)."""
     yield node
-    for child in (getattr(node, name) for name in ("left", "right", "child") if hasattr(node, name)):
+    for child in (
+        getattr(node, name) for name in ("left", "right", "child") if hasattr(node, name)
+    ):
         yield from iter_nodes(child)

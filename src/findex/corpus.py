@@ -1,4 +1,5 @@
 """Lazy document stream: one Document in memory at a time."""
+
 from __future__ import annotations
 
 import json
@@ -36,7 +37,12 @@ def _iter_jsonl(path: Path) -> Iterator[Document]:
                 continue
             try:
                 obj = json.loads(line)
-                yield Document(doc_id=str(obj.get("id", n)), path=path, text=obj["text"], title=str(obj.get("title", "")))
+                yield Document(
+                    doc_id=str(obj.get("id", n)),
+                    path=path,
+                    text=obj["text"],
+                    title=str(obj.get("title", "")),
+                )
             except (json.JSONDecodeError, KeyError) as exc:
                 log.warning("skipping %s line %d: %s", path, n, exc)
 

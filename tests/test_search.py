@@ -23,11 +23,11 @@ def engine(request):
 @pytest.fixture
 def idx():
     return make_index(
-        "cat dog",        # 0
-        "cat bird",       # 1
+        "cat dog",  # 0
+        "cat bird",  # 1
         "dog bird fish",  # 2
-        "fish",           # 3
-        "cat dog fish",   # 4
+        "fish",  # 3
+        "cat dog fish",  # 4
     )
 
 
@@ -79,7 +79,9 @@ def test_or_not_now_works(idx, engine):
     assert set(evaluate(idx, "cat OR NOT dog", engine)) == cats | (everything - dogs)
 
 
-@pytest.mark.parametrize("bad", ["cat OR", "OR cat", "cat AND OR dog", "NOT", "(cat", "cat)", '"cat'])
+@pytest.mark.parametrize(
+    "bad", ["cat OR", "OR cat", "cat AND OR dog", "NOT", "(cat", "cat)", '"cat']
+)
 def test_bad_queries(idx, bad):
     with pytest.raises(ValueError):
         evaluate(idx, bad)
@@ -92,6 +94,7 @@ def test_merge_and_set_agree_on_random_lists():
         b = sorted(rng.sample(range(60), rng.randint(0, 30)))
         for op in ("AND", "OR", "NOT"):
             assert ENGINES["merge"][op](a, b) == ENGINES["set"][op](a, b)
+
 
 # --- Lab 3 M4: Searcher and its cache ------------------------------------------------------
 
@@ -127,8 +130,9 @@ def test_each_searcher_has_its_own_cache(idx):
 def test_cached_ids_cannot_be_mutated_by_callers(idx):
     searcher = Searcher(idx)
     from findex.query import parse
+
     ids = searcher.matching(parse("cat"))
-    assert isinstance(ids, tuple)               # a list here could be corrupted for everyone
+    assert isinstance(ids, tuple)  # a list here could be corrupted for everyone
 
 
 def test_unranked_search_and_last_total(idx):

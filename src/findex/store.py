@@ -5,6 +5,7 @@ binary  - a small JSON header plus raw 4-byte integer arrays (array('I')).
 
     python -m findex.store data/simplewiki.jsonl --limit 20000     # benchmark both
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,7 +16,7 @@ import sys
 import tempfile
 import time
 from array import array
-from collections.abc import Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from functools import partial
 from itertools import islice
@@ -34,8 +35,8 @@ from .timing import timed
 # ---------------------------------------------------------------------------------------
 
 FORMATS = ("pickle", "binary")
-MAGIC = b"FINDEXB1"            # 8 bytes: identifies our binary format
-VERSION = 2                    # header version: 1 = no positions, 2 = optional positions
+MAGIC = b"FINDEXB1"  # 8 bytes: identifies our binary format
+VERSION = 2  # header version: 1 = no positions, 2 = optional positions
 assert array("I").itemsize == 4, "this format needs 4-byte unsigned ints"
 
 
@@ -43,7 +44,7 @@ def _format_of(head: bytes) -> str | None:
     """Identify a format from a file's first bytes: 'binary', 'pickle' or None."""
     if head == MAGIC:
         return "binary"
-    if head[:1] == b"\x80":     # every pickle protocol >= 2 starts with this opcode
+    if head[:1] == b"\x80":  # every pickle protocol >= 2 starts with this opcode
         return "pickle"
     return None
 
@@ -51,13 +52,14 @@ def _format_of(head: bytes) -> str | None:
 def detect_format(path: str | Path) -> str | None:
     """Look at the first bytes of a file. Returns 'binary', 'pickle' or None."""
     path = Path(path)
-    if path.is_dir():           # a folder of .txt files is a corpus, never an index
+    if path.is_dir():  # a folder of .txt files is a corpus, never an index
         return None
     with path.open("rb") as f:
         return _format_of(f.read(len(MAGIC)))
 
 
 # --- pickle -----------------------------------------------------------------------------
+
 
 def _save_pickle(index: Index, f: BinaryIO) -> None:
     pickle.dump(index, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -66,20 +68,21 @@ def _save_pickle(index: Index, f: BinaryIO) -> None:
 def _load_pickle(f: BinaryIO) -> Index:
     obj = pickle.load(f)
     if not isinstance(obj, Index):
-        raise ValueError("pickle file does not contain an Index")
+        raise TypeError(f"pickle file contains a {type(obj).__name__}, not an Index")
     return obj
 
 
 # --- binary ---------------------------------------------------------------------------------
 
-def _write_array(arr: array, f: BinaryIO) -> None:
-    if sys.byteorder == "big":   # the file is always little-endian
+
+def _write_array(arr: array[int], f: BinaryIO) -> None:
+    if sys.byteorder == "big":  # the file is always little-endian
         arr = array("I", arr)
         arr.byteswap()
     arr.tofile(f)
 
 
-def _read_array(f: BinaryIO, n: int) -> array:
+def _read_array(f: BinaryIO, n: int) -> array[int]:
     arr = array("I")
     try:
         arr.fromfile(f, n)
@@ -96,10 +99,10 @@ def _save_binary(index: Index, f: BinaryIO) -> None:
         raise ValueError("doc ids must be exactly 0..n-1")
 
     terms = list(index)
-    df = array("I", (index.df(t) for t in terms))   # postings per term
-    doc_ids = array("I")                                        # all postings, term by term
+    df = array("I", (index.df(t) for t in terms))  # postings per term
+    doc_ids = array("I")  # all postings, term by term
     tfs = array("I")
-    positions = array("I")      # every posting's positions, back to back (tf of them each)
+    positions = array("I")  # every posting's positions, back to back (tf of them each)
     has_positions = index.has_positions
     for term in terms:
         for p in index[term]:
@@ -134,7 +137,7 @@ def _load_binary(f: BinaryIO) -> Index:
     header = json.loads(f.read(hlen).decode("utf-8"))
     if header.get("version") not in (1, VERSION):
         raise ValueError(f"unsupported index version: {header.get('version')}")
-    has_positions = header.get("has_positions", False)   # version-1 files: never
+    has_positions = header.get("has_positions", False)  # version-1 files: never
 
     terms: list[str] = header["terms"]
     meta = header["meta"]
@@ -147,13 +150,13 @@ def _load_binary(f: BinaryIO) -> Index:
     positions = _read_array(f, sum(tfs)) if has_positions else None
 
     postings: dict[str, list[Posting]] = {}
-    pos = 0       # index into doc_ids/tfs
-    off = 0       # index into positions
+    pos = 0  # index into doc_ids/tfs
+    off = 0  # index into positions
     for term, n in zip(terms, df, strict=True):
-        plist = []
-        for d, t in zip(doc_ids[pos:pos + n], tfs[pos:pos + n], strict=True):
+        plist: list[Posting] = []
+        for d, t in zip(doc_ids[pos : pos + n], tfs[pos : pos + n], strict=True):
             if positions is not None:
-                plist.append(Posting(d, t, tuple(positions[off:off + t])))
+                plist.append(Posting(d, t, tuple(positions[off : off + t])))
                 off += t
             else:
                 plist.append(Posting(d, t))
@@ -168,6 +171,7 @@ def _load_binary(f: BinaryIO) -> Index:
 
 # --- public API ---------------------------------------------------------------------------
 
+
 def save(index: Index, path: str | Path, fmt: str = "binary") -> None:
     if fmt not in FORMATS:
         raise ValueError(f"unknown format {fmt!r}; choose from {FORMATS}")
@@ -176,20 +180,20 @@ def save(index: Index, path: str | Path, fmt: str = "binary") -> None:
 
 
 @contextmanager
-def open_index(path: str | Path, *, trust_pickle: bool = False) -> Iterator[Index]:
+def open_index(path: str | Path, *, trust_pickle: bool = False) -> Generator[Index]:
     """Open a saved index for the duration of a `with` block:
 
         with open_index("index.bin") as ix:
             print(ix["cat"])
 
-    The file is closed when the block ends -- normally or by an exception --
-    because the close sits in `finally`. Today the whole index is read up front,
+    The file is closed when the block ends -- normally or by an exception: the
+    exception is re-raised at the `yield`, inside the `with`, so the `with` closes
+    the file on the way out. Today the whole index is read up front,
     so the file isn't strictly needed inside the block. Keeping it open is what
     lets a future version mmap the postings and read them lazily (the Lab 2
     Stretch) without changing a single caller.
     """
-    f = Path(path).open("rb")
-    try:
+    with Path(path).open("rb") as f:
         fmt = _format_of(f.read(len(MAGIC)))
         f.seek(0)
         if fmt is None:
@@ -200,8 +204,6 @@ def open_index(path: str | Path, *, trust_pickle: bool = False) -> Iterator[Inde
                 "Pass trust_pickle=True (CLI: --trust-pickle) only if you created it yourself."
             )
         yield _load_pickle(f) if fmt == "pickle" else _load_binary(f)
-    finally:
-        f.close()
 
 
 @timed
@@ -213,7 +215,8 @@ def load(path: str | Path, *, trust_pickle: bool = False) -> Index:
 
 # --- benchmark -------------------------------------------------------------------------------
 
-def _best(fn, repeats: int = 3) -> float:
+
+def _best(fn: Callable[[], object], repeats: int = 3) -> float:
     best = float("inf")
     for _ in range(repeats):
         t0 = time.perf_counter()

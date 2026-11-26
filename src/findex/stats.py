@@ -1,4 +1,5 @@
 """python -m findex.stats data/simplewiki.jsonl [--limit N] [--eager]"""
+
 from __future__ import annotations
 
 import argparse
@@ -33,8 +34,8 @@ def stats_lazy(root: Path, limit: int | None = None) -> tuple[int, int, Counter[
 
 def stats_eager(root: Path, limit: int | None = None) -> tuple[int, int, Counter[str]]:
     """Deliberately wasteful baseline for the lab's comparison table."""
-    docs = list(islice(iter_documents(root), limit))            # all texts in RAM
-    all_tokens = [t for d in docs for t in tokenize(d.text)]    # all tokens in RAM
+    docs = list(islice(iter_documents(root), limit))  # all texts in RAM
+    all_tokens = [t for d in docs for t in tokenize(d.text)]  # all tokens in RAM
     return len(docs), len(all_tokens), Counter(all_tokens)
 
 

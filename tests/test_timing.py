@@ -14,7 +14,7 @@ def add(a, b=1):
 def test_wraps_keeps_the_function_identity():
     assert add.__name__ == "add"
     assert add.__doc__ == "Add two numbers."
-    assert add.__wrapped__(2, 3) == 5          # the original is still reachable
+    assert add.__wrapped__(2, 3) == 5  # the original is still reachable
 
 
 def test_passes_arguments_and_return_value_through():

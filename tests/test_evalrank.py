@@ -1,11 +1,16 @@
-import itertools
 from pathlib import Path
 
 import pytest
 
 from findex.corpus import Document
 from findex.evalrank import (
-    label, pool, precision_at_k, read_judgments, read_queries, report, write_judgments,
+    label,
+    pool,
+    precision_at_k,
+    read_judgments,
+    read_queries,
+    report,
+    write_judgments,
 )
 from findex.index import build_index
 from findex.search import Searcher
@@ -19,8 +24,8 @@ def idx():
 
 def test_precision_at_5():
     judged = {"a": True, "b": False, "c": True}
-    assert precision_at_k(["a", "b", "c", "d", "e"], judged) == (0.4, 2)   # d, e unjudged
-    assert precision_at_k(["a"], judged) == (0.2, 0)                       # fewer than 5: /5
+    assert precision_at_k(["a", "b", "c", "d", "e"], judged) == (0.4, 2)  # d, e unjudged
+    assert precision_at_k(["a"], judged) == (0.2, 0)  # fewer than 5: /5
     assert precision_at_k([], judged) == (0.0, 0)
 
 
@@ -44,7 +49,7 @@ def test_pool_is_the_union_of_both_top_5s_without_duplicates(idx):
 
 def test_label_saves_after_each_answer_and_resumes(idx, tmp_path):
     path = tmp_path / "j.json"
-    answers = iter(["huh?", "y", "n", "q"])     # an invalid answer is asked again
+    answers = iter(["huh?", "y", "n", "q"])  # an invalid answer is asked again
     label(idx, ["cat"], path, ask=lambda _: next(answers))
     assert list(read_judgments(path)["cat"].values()) == [True, False]
 
@@ -52,7 +57,7 @@ def test_label_saves_after_each_answer_and_resumes(idx, tmp_path):
     label(idx, ["cat"], path, ask=lambda prompt: asked.append(prompt) or "y")
     final = read_judgments(path)["cat"]
     assert len(final) == len(pool(Searcher(idx), "cat"))
-    assert len(asked) == len(final) - 2          # the two judged ones weren't asked again
+    assert len(asked) == len(final) - 2  # the two judged ones weren't asked again
 
 
 def test_report_table(idx, tmp_path):

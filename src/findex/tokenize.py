@@ -9,6 +9,7 @@ Policy:
   * Digits are kept, but "3.14" and "100,000" split at the punctuation.
   * Abbreviations split too: "U.S." -> u, s.
 """
+
 from __future__ import annotations
 
 import re
@@ -23,6 +24,7 @@ def tokenize(text: str) -> Iterator[str]:
     text = unicodedata.normalize("NFC", text).casefold().translate(_APOSTROPHES)
     for m in _TOKEN.finditer(text):  # finditer = lazy; findall would build a list
         yield m.group()
+
 
 def token_spans(text: str) -> Iterator[tuple[str, int, int]]:
     """(token, start, end) for every token, with offsets into the NFC form of text.

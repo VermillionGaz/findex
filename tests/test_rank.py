@@ -1,3 +1,4 @@
+import itertools
 import random
 from pathlib import Path
 
@@ -54,8 +55,8 @@ def test_bm25_saturates_and_tfidf_does_not():
     bm25 = [BM25()("cat", Posting(0, tf), idx) for tf in range(21)]
     tfidf = [TfIdf()("cat", Posting(0, tf), idx) for tf in range(21)]
     first, last = bm25[1] - bm25[0], bm25[20] - bm25[19]
-    assert last < 0.05 * first                                   # 20th adds almost nothing
-    assert all(b2 > b1 for b1, b2 in zip(bm25, bm25[1:]))        # but never decreases
+    assert last < 0.05 * first  # 20th adds almost nothing
+    assert all(b2 > b1 for b1, b2 in itertools.pairwise(bm25))  # but never decreases
     assert tfidf[20] - tfidf[19] == pytest.approx(tfidf[1] - tfidf[0])  # linear
 
 
@@ -70,15 +71,19 @@ def test_bm25_parameters_do_what_they_claim():
     idx = make("cat dog", "cat " + FILLER * 20, "dog")
     # approx: e.g. idf*9*1/9 and idf*1*1/1 can differ in the last bit of a float
     no_length = BM25(b=0)
-    assert no_length("cat", Posting(0, 1), idx) == pytest.approx(no_length("cat", Posting(1, 1), idx))
+    assert no_length("cat", Posting(0, 1), idx) == pytest.approx(
+        no_length("cat", Posting(1, 1), idx)
+    )
     binary_tf = BM25(k1=0)
-    assert binary_tf("cat", Posting(0, 1), idx) == pytest.approx(binary_tf("cat", Posting(0, 9), idx))
+    assert binary_tf("cat", Posting(0, 1), idx) == pytest.approx(
+        binary_tf("cat", Posting(0, 9), idx)
+    )
 
 
 def test_bm25_idf_never_negative_even_for_a_term_in_every_doc():
     idx = make("the cat", "the dog", "the bird")
     assert all(BM25()("the", p, idx) > 0 for p in idx["the"])
-    assert all(TfIdf()("the", p, idx) == 0 for p in idx["the"])   # log(N/N) = 0
+    assert all(TfIdf()("the", p, idx) == 0 for p in idx["the"])  # log(N/N) = 0
 
 
 def test_unknown_term_scores_zero_and_ranks_nothing():
@@ -102,7 +107,7 @@ def test_top_k_with_k_larger_than_the_results():
 def test_search_results_sort_by_score_then_doc_id():
     a, b, c = SearchResult(1.0, 5, "x"), SearchResult(2.0, 1, "y"), SearchResult(1.0, 3, "z")
     assert sorted([a, b, c]) == [c, a, b]
-    assert sorted([a, b, c], reverse=True)[0] == b
+    assert max([a, b, c]) == b
 
 
 def test_rank_returns_best_first_with_titles():
@@ -123,7 +128,7 @@ def test_positive_terms_skip_operators_and_negated_terms():
 def test_search_filters_with_boolean_and_ranks_the_rest():
     idx = make("cat dog", "cat cat cat", "cat fish", "dog")
     assert [r.doc_id for r in search(idx, "cat NOT fish", TfIdf())] == [1, 0]
-    assert [r.doc_id for r in search(idx, "cat dog")] == [0]          # implicit AND
+    assert [r.doc_id for r in search(idx, "cat dog")] == [0]  # implicit AND
     assert {r.doc_id for r in search(idx, "cat OR dog")} == {0, 1, 2, 3}
 
 
@@ -144,11 +149,13 @@ def test_sanity_script_checks_hold_on_a_small_index(capsys):
         check_saturation,
         check_short_beats_long,
     )
+
     rng = random.Random(1)
     vocab = [f"w{i}" for i in range(300)]
     weights = [1 / (i + 1) for i in range(300)]
-    idx = make(*(" ".join(rng.choices(vocab, weights, k=rng.choice([10, 50, 400])))
-                 for _ in range(200)))
+    idx = make(
+        *(" ".join(rng.choices(vocab, weights, k=rng.choice([10, 50, 400]))) for _ in range(200))
+    )
     assert check_rare_beats_common(idx)
     assert check_saturation(idx)
     assert check_short_beats_long(idx)

@@ -5,8 +5,10 @@ from findex.index import DocMeta, Posting, build_index
 
 
 def make(*texts):
-    return [Document(doc_id=f"d{i}", path=Path(f"d{i}.txt"), text=t, title=f"T{i}")
-            for i, t in enumerate(texts)]
+    return [
+        Document(doc_id=f"d{i}", path=Path(f"d{i}.txt"), text=t, title=f"T{i}")
+        for i, t in enumerate(texts)
+    ]
 
 
 def test_postings_are_sorted_and_counted():
@@ -46,13 +48,12 @@ def test_matches_term_counts_with_tokenizer_rules():
     idx = build_index(make("Don't don’t DON'T"))
     assert idx.get("don't") == [Posting(0, 3, (0, 1, 2))]
 
+
 # --- Lab 3 M1: Index as a Mapping -------------------------------------------------------
 
 from collections.abc import Mapping
 
 import pytest
-
-from findex.index import Index
 
 
 def lab3_idx():
@@ -62,11 +63,14 @@ def lab3_idx():
 def test_index_is_a_mapping_of_postings():
     idx = lab3_idx()
     assert isinstance(idx, Mapping)
-    assert len(idx) == 4                                   # cat, dog, bird, fish
+    assert len(idx) == 4  # cat, dog, bird, fish
     assert "cat" in idx and "zzz" not in idx
     assert idx["cat"] == [Posting(0, 2, (0, 2)), Posting(2, 1, (0,))]
     assert set(idx) == {"cat", "dog", "bird", "fish"}
-    assert dict(idx.items())["dog"] == [Posting(0, 1, (1,)), Posting(1, 1, (0,))]  # inherited from Mapping
+    assert dict(idx.items())["dog"] == [
+        Posting(0, 1, (1,)),
+        Posting(1, 1, (0,)),
+    ]  # inherited from Mapping
 
 
 def test_unknown_term_raises_keyerror_and_does_not_insert():
@@ -87,8 +91,8 @@ def test_statistics():
 def test_avg_doc_length_is_computed_once():
     idx = lab3_idx()
     first = idx.avg_doc_length
-    idx.doc_lengths[0] = 1000            # deliberately mutate behind its back...
-    assert idx.avg_doc_length == first   # ...the cached value is not recomputed
+    idx.doc_lengths[0] = 1000  # deliberately mutate behind its back...
+    assert idx.avg_doc_length == first  # ...the cached value is not recomputed
     assert "avg_doc_length" in vars(idx)  # cached_property stored it in __dict__
 
 
@@ -107,13 +111,14 @@ def test_equality_covers_metadata_not_just_postings():
     b = lab3_idx()
     assert a == b
     b.doc_meta[0] = DocMeta(ext_id="other", path="x", title="X")
-    assert a != b                        # Mapping.__eq__ alone would say they're equal
-    assert a != dict(a.items())          # an Index never equals a plain dict
+    assert a != b  # Mapping.__eq__ alone would say they're equal
+    assert a != dict(a.items())  # an Index never equals a plain dict
     with pytest.raises(TypeError):
         hash(a)
 
 
 # --- Lab 3 M3: positions ----------------------------------------------------------------
+
 
 def test_positions_are_recorded_in_order():
     idx = build_index(make("to be or not to be"))
@@ -128,7 +133,9 @@ def test_without_positions_matches_lab2_behaviour():
     assert without["cat"] == [Posting(0, 2)] and not without.has_positions
     assert without.doc_lengths == with_pos.doc_lengths
     for term in with_pos:
-        assert [(p.doc_id, p.tf) for p in with_pos[term]] == [(p.doc_id, p.tf) for p in without[term]]
+        assert [(p.doc_id, p.tf) for p in with_pos[term]] == [
+            (p.doc_id, p.tf) for p in without[term]
+        ]
 
 
 def test_tf_always_equals_number_of_positions():
