@@ -1,13 +1,31 @@
 [project]
 name = "findex"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.4.0"
+description = "A small full-text search engine: inverted index, BM25 ranking, a Boolean query language."
 readme = "README.md"
 authors = [
     { name = "Gaz", email = "anton.yaremich@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+keywords = ["search", "inverted-index", "bm25", "full-text-search"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Environment :: Console",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "rich>=13.7",
+    "typer>=0.15",
+]
+
+[project.urls]
+Repository = "https://github.com/VermillionGaz/findex"
+
+[project.scripts]
+# `findex` on the command line runs the typer app object in findex/cli.py
+findex = "findex.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.13.10,<0.14.0"]
@@ -52,3 +70,4 @@ exclude_also = [
     "raise NotImplementedError",     # abstract methods: subclasses must override them
     'if __name__ == "__main__":',
 ]
+omit = ["*/findex/__main__.py"]      # two lines that only forward to cli.app
